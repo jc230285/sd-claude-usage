@@ -96,9 +96,9 @@ function buildSvg(data, displayMode) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">
   <rect width="${size}" height="${size}" fill="${bgColor}" rx="12"/>
   <circle cx="${cx}" cy="${cy}" r="${outerR}" fill="none" stroke="${bgRing}" stroke-width="${sw}"/>
-  <path d="${describeArc(cx, cy, outerR, 0, usedAngle)}" fill="none" stroke="${usedColor}" stroke-width="${sw}" stroke-linecap="round"/>
+  <path d="${describeArc(cx, cy, outerR, 180, 180 + usedAngle)}" fill="none" stroke="${usedColor}" stroke-width="${sw}" stroke-linecap="round"/>
   <circle cx="${cx}" cy="${cy}" r="${innerR}" fill="none" stroke="${bgRing}" stroke-width="${sw}"/>
-  <path d="${describeArc(cx, cy, innerR, 0, remainAngle)}" fill="none" stroke="${remainColor}" stroke-width="${sw}" stroke-linecap="round"/>
+  <path d="${describeArc(cx, cy, innerR, 180, 180 + remainAngle)}" fill="none" stroke="${remainColor}" stroke-width="${sw}" stroke-linecap="round"/>
   <text x="${cx}" y="${cy - 16}" text-anchor="middle" dominant-baseline="central" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="${usedColor}">${label}</text>
   <text x="${cx}" y="${cy + 4}" text-anchor="middle" dominant-baseline="central" font-family="Arial,sans-serif" font-size="24" font-weight="bold" fill="${timeColor}">${time.value}${time.unit}</text>
   <text x="${cx}" y="${cy + 22}" text-anchor="middle" dominant-baseline="central" font-family="Arial,sans-serif" font-size="11" fill="${usedColor}">${Math.round(usedPct)}% used</text>
