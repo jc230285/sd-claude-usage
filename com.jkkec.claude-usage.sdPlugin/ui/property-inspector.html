@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Claude Usage</title>
+  <link rel="stylesheet" href="https://sdpi-components.dev/css/sdpi.css" />
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #2d2d2d; color: #ccc; margin: 0; padding: 8px; }
+    .sdpi-wrapper { padding: 4px 16px; }
+    .sdpi-item { display: flex; align-items: center; margin: 8px 0; }
+    .sdpi-item-label { min-width: 80px; font-size: 12px; color: #999; }
+    select { flex: 1; background: #3b3b3b; color: #ccc; border: 1px solid #555; border-radius: 3px; padding: 4px 8px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="sdpi-wrapper">
+    <div class="sdpi-item">
+      <div class="sdpi-item-label">Display</div>
+      <select id="displayMode">
+        <option value="auto">Auto (highest usage)</option>
+        <option value="five_hour">Session (5 Hour)</option>
+        <option value="seven_day">Weekly (7 Day)</option>
+      </select>
+    </div>
+  </div>
+
+  <script>
+    let websocket = null;
+    let uuid = null;
+    let actionInfo = null;
+    let settings = {};
+
+    function connectElgatoStreamDeckSocket(inPort, inPropertyInspectorUUID, inRegisterEvent, inInfo, inActionInfo) {
+      uuid = inPropertyInspectorUUID;
+      actionInfo = JSON.parse(inActionInfo);
+      settings = actionInfo.payload.settings || {};
+
+      // Set current value
+      const sel = document.getElementById("displayMode");
+      if (settings.displayMode) {
+        sel.value = settings.displayMode;
+      }
+
+      websocket = new WebSocket("ws://127.0.0.1:" + inPort);
+      websocket.onopen = function () {
+        websocket.send(JSON.stringify({ event: inRegisterEvent, uuid: inPropertyInspectorUUID }));
+      };
+
+      sel.addEventListener("change", function () {
+        settings.displayMode = sel.value;
+        websocket.send(JSON.stringify({
+          event: "setSettings",
+          context: uuid,
+          payload: settings
+        }));
+      });
+    }
+  </script>
+</body>
+</html>

@@ -27,6 +27,7 @@
       "Name": "Claude Usage",
       "UUID": "com.jkkec.claude-usage.usage",
       "Icon": "imgs/actions/usage/icon",
+      "PropertyInspectorPath": "ui/property-inspector.html",
       "Tooltip": "Shows Claude Code usage rings and reset timer",
       "States": [
         {
