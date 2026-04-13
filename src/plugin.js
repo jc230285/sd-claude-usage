@@ -81,7 +81,7 @@ function buildSvg(data, displayMode) {
 
   // Session (5H) = red, Weekly (7D) = green, time = blue
   const usedColor = label === "5H" ? "#ff4757" : "#2ed573";
-  const remainColor = label === "5H" ? "#ff6b7a" : "#5ce08a";
+  const remainColor = "#3b9dff";
   const bgRing = "#2f3542";
   const timeColor = "#3b9dff";
 
