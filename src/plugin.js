@@ -84,6 +84,7 @@ function buildSvg(data, displayMode) {
   const remainColor = "#3b9dff";
   const bgRing = "#2f3542";
   const timeColor = "#3b9dff";
+  const bgColor = remainPct < usedPct ? "#3a0000" : "#000000";
 
   const outerR = 62;
   const innerR = 47;
@@ -93,7 +94,7 @@ function buildSvg(data, displayMode) {
   const remainAngle = Math.min(Math.max(remainPct * 3.6, 1), 359.9);
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">
-  <rect width="${size}" height="${size}" fill="#000000" rx="12"/>
+  <rect width="${size}" height="${size}" fill="${bgColor}" rx="12"/>
   <circle cx="${cx}" cy="${cy}" r="${outerR}" fill="none" stroke="${bgRing}" stroke-width="${sw}"/>
   <path d="${describeArc(cx, cy, outerR, 0, usedAngle)}" fill="none" stroke="${usedColor}" stroke-width="${sw}" stroke-linecap="round"/>
   <circle cx="${cx}" cy="${cy}" r="${innerR}" fill="none" stroke="${bgRing}" stroke-width="${sw}"/>
