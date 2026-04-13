@@ -84,15 +84,18 @@ function buildSvg(data, displayMode) {
     }
   }
 
-  const remainPct = 100 - usedPct;
   const time = timeUntil(resetAt);
+  // Time elapsed as % of the window (5h = 18000s, 7d = 604800s)
+  const windowSec = label === "5H" ? 5 * 3600 : 7 * 24 * 3600;
+  const secsLeft = Math.max((resetAt * 1000 - Date.now()) / 1000, 0);
+  const timeElapsedPct = Math.min(((windowSec - secsLeft) / windowSec) * 100, 100);
 
   // Session (5H) = red, Weekly (7D) = green, time = blue
   const usedColor = label === "5H" ? "#ff4757" : "#2ed573";
   const remainColor = "#3b9dff";
   const bgRing = "#2f3542";
   const timeColor = "#3b9dff";
-  const bgColor = remainPct < usedPct ? "#3a0000" : "#000000";
+  const bgColor = (100 - usedPct) < usedPct ? "#3a0000" : "#000000";
 
   const outerR = 62;
   const innerR = 47;
@@ -103,7 +106,7 @@ function buildSvg(data, displayMode) {
   <circle cx="${cx}" cy="${cy}" r="${outerR}" fill="none" stroke="${bgRing}" stroke-width="${sw}"/>
   <path d="${describeArc(cx, cy, outerR, usedPct)}" fill="none" stroke="${usedColor}" stroke-width="${sw}" stroke-linecap="round"/>
   <circle cx="${cx}" cy="${cy}" r="${innerR}" fill="none" stroke="${bgRing}" stroke-width="${sw}"/>
-  <path d="${describeArc(cx, cy, innerR, remainPct)}" fill="none" stroke="${remainColor}" stroke-width="${sw}" stroke-linecap="round"/>
+  <path d="${describeArc(cx, cy, innerR, timeElapsedPct)}" fill="none" stroke="${remainColor}" stroke-width="${sw}" stroke-linecap="round"/>
   <text x="${cx}" y="${cy - 16}" text-anchor="middle" dominant-baseline="central" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="${usedColor}">${label}</text>
   <text x="${cx}" y="${cy + 4}" text-anchor="middle" dominant-baseline="central" font-family="Arial,sans-serif" font-size="24" font-weight="bold" fill="${timeColor}">${time.value}${time.unit}</text>
   <text x="${cx}" y="${cy + 22}" text-anchor="middle" dominant-baseline="central" font-family="Arial,sans-serif" font-size="11" fill="${usedColor}">${Math.round(usedPct)}% used</text>
