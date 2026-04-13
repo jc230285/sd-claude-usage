@@ -101,7 +101,7 @@ function buildSvg(data, displayMode) {
   const remainColor = "#3b9dff";
   const bgRing = "#2f3542";
   const timeColor = "#3b9dff";
-  const bgColor = usedPct > timeElapsedPct ? "#3a0000" : "#000000";
+  const bgColor = usedPct > timeElapsedPct ? "#6b0000" : "#000000";
 
   const outerR = 62;
   const innerR = 47;
