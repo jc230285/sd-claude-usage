@@ -41,7 +41,7 @@ function buildSvg(data, displayMode) {
 
   if (!data || (!data.five_hour && !data.seven_day)) {
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">
-      <rect width="${size}" height="${size}" fill="#1a1a2e" rx="12"/>
+      <rect width="${size}" height="${size}" fill="#000000" rx="12"/>
       <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central"
             font-family="Arial,sans-serif" font-size="14" fill="#888">Waiting...</text>
     </svg>`;
@@ -93,7 +93,7 @@ function buildSvg(data, displayMode) {
   const remainAngle = Math.min(Math.max(remainPct * 3.6, 1), 359.9);
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">
-  <rect width="${size}" height="${size}" fill="#1a1a2e" rx="12"/>
+  <rect width="${size}" height="${size}" fill="#000000" rx="12"/>
   <circle cx="${cx}" cy="${cy}" r="${outerR}" fill="none" stroke="${bgRing}" stroke-width="${sw}"/>
   <path d="${describeArc(cx, cy, outerR, 0, usedAngle)}" fill="none" stroke="${usedColor}" stroke-width="${sw}" stroke-linecap="round"/>
   <circle cx="${cx}" cy="${cy}" r="${innerR}" fill="none" stroke="${bgRing}" stroke-width="${sw}"/>
