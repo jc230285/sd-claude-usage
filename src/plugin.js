@@ -79,9 +79,11 @@ function buildSvg(data, displayMode) {
   const remainPct = 100 - usedPct;
   const time = timeUntil(resetAt);
 
-  const usedColor = usedPct > 80 ? "#ff4757" : usedPct > 50 ? "#ffa502" : "#2ed573";
-  const remainColor = "#3742fa";
+  // Session (5H) = red, Weekly (7D) = green, time = blue
+  const usedColor = label === "5H" ? "#ff4757" : "#2ed573";
+  const remainColor = label === "5H" ? "#ff6b7a" : "#5ce08a";
   const bgRing = "#2f3542";
+  const timeColor = "#3b9dff";
 
   const outerR = 62;
   const innerR = 47;
@@ -96,9 +98,9 @@ function buildSvg(data, displayMode) {
   <path d="${describeArc(cx, cy, outerR, 0, usedAngle)}" fill="none" stroke="${usedColor}" stroke-width="${sw}" stroke-linecap="round"/>
   <circle cx="${cx}" cy="${cy}" r="${innerR}" fill="none" stroke="${bgRing}" stroke-width="${sw}"/>
   <path d="${describeArc(cx, cy, innerR, 0, remainAngle)}" fill="none" stroke="${remainColor}" stroke-width="${sw}" stroke-linecap="round"/>
-  <text x="${cx}" y="${cy - 16}" text-anchor="middle" dominant-baseline="central" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#aaa">${label}</text>
-  <text x="${cx}" y="${cy + 4}" text-anchor="middle" dominant-baseline="central" font-family="Arial,sans-serif" font-size="24" font-weight="bold" fill="#fff">${time.value}${time.unit}</text>
-  <text x="${cx}" y="${cy + 22}" text-anchor="middle" dominant-baseline="central" font-family="Arial,sans-serif" font-size="11" fill="#aaa">${Math.round(usedPct)}% used</text>
+  <text x="${cx}" y="${cy - 16}" text-anchor="middle" dominant-baseline="central" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="${usedColor}">${label}</text>
+  <text x="${cx}" y="${cy + 4}" text-anchor="middle" dominant-baseline="central" font-family="Arial,sans-serif" font-size="24" font-weight="bold" fill="${timeColor}">${time.value}${time.unit}</text>
+  <text x="${cx}" y="${cy + 22}" text-anchor="middle" dominant-baseline="central" font-family="Arial,sans-serif" font-size="11" fill="${usedColor}">${Math.round(usedPct)}% used</text>
 </svg>`;
 }
 
