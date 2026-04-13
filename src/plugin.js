@@ -24,13 +24,21 @@ function timeUntil(epochSec) {
   return { value: Math.round(hours * 10) / 10, unit: "h" };
 }
 
-function describeArc(cx, cy, r, startAngle, endAngle) {
+// Draws arc that fills from bottom upward (counter-clockwise from right-of-bottom)
+// 0% = empty, 100% = full circle ending at top
+function describeArc(cx, cy, r, pct) {
+  const angle = Math.min(Math.max(pct * 3.6, 1), 359.9);
+  // Start at bottom (180deg), end point goes counter-clockwise
+  // Counter-clockwise: bottom -> right -> top -> left -> bottom
+  // We draw clockwise from (180 - angle) to 180, so the "fill" appears to rise from bottom
+  const startDeg = 180 - angle;
+  const endDeg = 180;
   const rad = (deg) => ((deg - 90) * Math.PI) / 180;
-  const x1 = cx + r * Math.cos(rad(startAngle));
-  const y1 = cy + r * Math.sin(rad(startAngle));
-  const x2 = cx + r * Math.cos(rad(endAngle));
-  const y2 = cy + r * Math.sin(rad(endAngle));
-  const largeArc = endAngle - startAngle > 180 ? 1 : 0;
+  const x1 = cx + r * Math.cos(rad(startDeg));
+  const y1 = cy + r * Math.sin(rad(startDeg));
+  const x2 = cx + r * Math.cos(rad(endDeg));
+  const y2 = cy + r * Math.sin(rad(endDeg));
+  const largeArc = angle > 180 ? 1 : 0;
   return `M ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2}`;
 }
 
@@ -90,15 +98,12 @@ function buildSvg(data, displayMode) {
   const innerR = 47;
   const sw = 10;
 
-  const usedAngle = Math.min(Math.max(usedPct * 3.6, 1), 359.9);
-  const remainAngle = Math.min(Math.max(remainPct * 3.6, 1), 359.9);
-
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">
   <rect width="${size}" height="${size}" fill="${bgColor}" rx="12"/>
   <circle cx="${cx}" cy="${cy}" r="${outerR}" fill="none" stroke="${bgRing}" stroke-width="${sw}"/>
-  <path d="${describeArc(cx, cy, outerR, 180, 180 + usedAngle)}" fill="none" stroke="${usedColor}" stroke-width="${sw}" stroke-linecap="round"/>
+  <path d="${describeArc(cx, cy, outerR, usedPct)}" fill="none" stroke="${usedColor}" stroke-width="${sw}" stroke-linecap="round"/>
   <circle cx="${cx}" cy="${cy}" r="${innerR}" fill="none" stroke="${bgRing}" stroke-width="${sw}"/>
-  <path d="${describeArc(cx, cy, innerR, 180, 180 + remainAngle)}" fill="none" stroke="${remainColor}" stroke-width="${sw}" stroke-linecap="round"/>
+  <path d="${describeArc(cx, cy, innerR, remainPct)}" fill="none" stroke="${remainColor}" stroke-width="${sw}" stroke-linecap="round"/>
   <text x="${cx}" y="${cy - 16}" text-anchor="middle" dominant-baseline="central" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="${usedColor}">${label}</text>
   <text x="${cx}" y="${cy + 4}" text-anchor="middle" dominant-baseline="central" font-family="Arial,sans-serif" font-size="24" font-weight="bold" fill="${timeColor}">${time.value}${time.unit}</text>
   <text x="${cx}" y="${cy + 22}" text-anchor="middle" dominant-baseline="central" font-family="Arial,sans-serif" font-size="11" fill="${usedColor}">${Math.round(usedPct)}% used</text>
