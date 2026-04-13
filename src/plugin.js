@@ -24,22 +24,28 @@ function timeUntil(epochSec) {
   return { value: Math.round(hours * 10) / 10, unit: "h" };
 }
 
-// Draws arc that fills from bottom upward (counter-clockwise from right-of-bottom)
-// 0% = empty, 100% = full circle ending at top
+// Draws arc that fills from bottom upward, 0% at bottom, 100% at top
 function describeArc(cx, cy, r, pct) {
   const angle = Math.min(Math.max(pct * 3.6, 1), 359.9);
-  // Start at bottom (180deg), end point goes counter-clockwise
-  // Counter-clockwise: bottom -> right -> top -> left -> bottom
-  // We draw clockwise from (180 - angle) to 180, so the "fill" appears to rise from bottom
-  const startDeg = 180 - angle;
-  const endDeg = 180;
+  // 0 deg = 12 o'clock (top). We want 100% to end at top (0 deg).
+  // Start: 0 - angle (goes backwards from top), End: 0 (top)
+  // At low %, the arc is a small sliver near the top... that's wrong.
+  // We want: start at bottom, fill up both sides, meet at top.
+  // So: start at (180 + angle/2), sweep clockwise to (180 - angle/2)
+  // This spreads symmetrically from bottom upward on both sides.
+  const half = angle / 2;
+  const startDeg = 180 + half;
+  const endDeg = 180 - half;
   const rad = (deg) => ((deg - 90) * Math.PI) / 180;
   const x1 = cx + r * Math.cos(rad(startDeg));
   const y1 = cy + r * Math.sin(rad(startDeg));
   const x2 = cx + r * Math.cos(rad(endDeg));
   const y2 = cy + r * Math.sin(rad(endDeg));
+  // Sweep goes clockwise from start to end (the short way round when <180, long way when >180)
+  // But startDeg > endDeg so clockwise sweep goes the long way round = through the top
   const largeArc = angle > 180 ? 1 : 0;
-  return `M ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2}`;
+  // Sweep flag 0 = counter-clockwise (from start, goes up through top to end)
+  return `M ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 0 ${x2} ${y2}`;
 }
 
 function buildSvg(data, displayMode) {
@@ -95,7 +101,7 @@ function buildSvg(data, displayMode) {
   const remainColor = "#3b9dff";
   const bgRing = "#2f3542";
   const timeColor = "#3b9dff";
-  const bgColor = (100 - usedPct) < usedPct ? "#3a0000" : "#000000";
+  const bgColor = usedPct > timeElapsedPct ? "#3a0000" : "#000000";
 
   const outerR = 62;
   const innerR = 47;
