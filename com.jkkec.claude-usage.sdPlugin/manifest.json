@@ -1,0 +1,39 @@
+{
+  "Name": "Claude Usage",
+  "Version": "1.0.0",
+  "Author": "jkkec",
+  "Description": "Shows Claude Code CLI usage with dual rings and reset timer",
+  "Icon": "imgs/plugin",
+  "CodePath": "bin/plugin.js",
+  "Category": "Claude",
+  "CategoryIcon": "imgs/plugin",
+  "UUID": "com.jkkec.claude-usage",
+  "SDKVersion": 2,
+  "Software": {
+    "MinimumVersion": "6.5"
+  },
+  "OS": [
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    }
+  ],
+  "Nodejs": {
+    "Version": "20",
+    "Debug": "enabled"
+  },
+  "Actions": [
+    {
+      "Name": "Claude Usage",
+      "UUID": "com.jkkec.claude-usage.usage",
+      "Icon": "imgs/actions/usage/icon",
+      "Tooltip": "Shows Claude Code usage rings and reset timer",
+      "States": [
+        {
+          "Image": "imgs/actions/usage/icon",
+          "TitleAlignment": "middle"
+        }
+      ]
+    }
+  ]
+}

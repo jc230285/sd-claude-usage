@@ -1,0 +1,3 @@
+node_modules/
+com.jkkec.claude-usage.sdPlugin/bin/
+*.log

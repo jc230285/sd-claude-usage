@@ -1,0 +1,16 @@
+{
+  "name": "sd-claude-usage",
+  "version": "1.0.0",
+  "description": "Stream Deck plugin showing Claude Code usage rings",
+  "main": "src/plugin.js",
+  "scripts": {
+    "build": "node build.js",
+    "watch": "node build.js --watch"
+  },
+  "dependencies": {
+    "@elgato/streamdeck": "^2.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.20.0"
+  }
+}
