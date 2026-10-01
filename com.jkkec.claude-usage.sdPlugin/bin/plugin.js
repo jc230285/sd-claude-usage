@@ -5,7 +5,7 @@ var path = require("path");
 var os = require("os");
 var { execFileSync } = require("child_process");
 var RATE_LIMITS_PATH = path.join(os.homedir(), ".claude", "rate_limits.json");
-var DEFAULT_JARVISAI_URL = "http://100.96.106.91:8792";
+var DEFAULT_JARVISAI_URL = "http://127.0.0.1:8792";
 var TOKEN_VAULT_KEY = "JARVIS_AGENT_PROXY_KEY";
 var DEFAULT_REFRESH_SECONDS = 30;
 var PROVIDER_ORDER = ["claude", "codex", "gemini", "groq", "openrouter", "ollama"];
@@ -150,19 +150,26 @@ function normalizeJarvisV1(health = {}, usage = {}) {
   };
 }
 async function readJarvisAi(baseUrl, settings = {}) {
-  const base = String(baseUrl || DEFAULT_JARVISAI_URL).replace(/\/+$/, "");
-  try {
-    const bridge = await fetchJson(base + "/stats");
-    if (bridge && bridge.providers && bridge.totals)
-      return bridge;
-  } catch {
+  const configured = String(baseUrl || "").replace(/\/+$/, "");
+  const preferred = String(DEFAULT_JARVISAI_URL).replace(/\/+$/, "");
+  const candidates = [...new Set([preferred, configured].filter(Boolean))];
+  let bridgeError = null;
+  for (const base of candidates) {
+    try {
+      const bridge = await fetchJson(base + "/stats");
+      if (bridge && bridge.providers && bridge.totals)
+        return bridge;
+    } catch (err) {
+      bridgeError = err;
+    }
   }
   const token = readJarvisToken(settings);
   if (!token)
-    throw new Error("JarvisAI bridge unavailable and machine credential unavailable");
+    throw new Error(`JarvisAI bridge unavailable (${bridgeError?.message || "unknown"}); machine credential unavailable`);
+  const directBase = configured && !configured.includes(":8792") ? configured : "https://ai.viresinnumeris.co.uk";
   const [health, usage] = await Promise.all([
-    fetchJson(base + "/v1/health", token),
-    fetchJson(base + "/v1/usage", token)
+    fetchJson(directBase + "/v1/health", token),
+    fetchJson(directBase + "/v1/usage", token)
   ]);
   return normalizeJarvisV1(health, usage);
 }
@@ -305,6 +312,10 @@ function svgData(svg) {
   return "data:image/svg+xml;base64," + Buffer.from(svg).toString("base64");
 }
 var runtimes = /* @__PURE__ */ new Map();
+var sharedSnapshot = null;
+var sharedTimer = null;
+var sharedPollPromise = null;
+var lastPollAt = 0;
 async function settingsFor(action) {
   try {
     return await action.getSettings();
@@ -315,20 +326,10 @@ async function settingsFor(action) {
 function availableViews(snapshot) {
   return ["overview", ...PROVIDER_ORDER.filter((p) => snapshot?.providers?.[p])];
 }
-async function loadSnapshot(settings) {
-  if (settings.dataSource !== "local") {
-    try {
-      return await readJarvisAi(settings.jarvisAiUrl || DEFAULT_JARVISAI_URL, settings);
-    } catch (err) {
-      streamDeck.logger.warn(`JarvisAI telemetry failed: ${err.message}`);
-    }
-  }
-  return legacySnapshot();
-}
-async function updateKey(action, runtime = {}) {
-  const settings = await settingsFor(action);
-  const snapshot = await loadSnapshot(settings);
-  runtime.snapshot = snapshot;
+function renderAction(runtime) {
+  const action = runtime.action;
+  const settings = runtime.settings || {};
+  const snapshot = sharedSnapshot || legacySnapshot();
   if (!snapshot) {
     action.setImage(svgData(buildWaitingSvg()));
     return;
@@ -344,47 +345,90 @@ async function updateKey(action, runtime = {}) {
   } else if (view === "overview") {
     action.setImage(svgData(buildOverviewSvg(snapshot)));
   } else {
-    action.setImage(svgData(buildProviderSvg(snapshot.providers[view])));
+    action.setImage(svgData(buildProviderSvg(snapshot.providers?.[view])));
   }
 }
-async function startRuntime(action) {
+function renderAll() {
+  for (const runtime of runtimes.values())
+    renderAction(runtime);
+}
+function globalRefreshSeconds() {
+  const configured = [...runtimes.values()].map((r) => num(r.settings?.refreshSeconds, DEFAULT_REFRESH_SECONDS)).filter(Number.isFinite);
+  return Math.max(10, Math.min(300, configured.length ? Math.min(...configured) : DEFAULT_REFRESH_SECONDS));
+}
+function armSharedTimer() {
+  if (sharedTimer)
+    clearInterval(sharedTimer);
+  if (!runtimes.size) {
+    sharedTimer = null;
+    return;
+  }
+  sharedTimer = setInterval(() => pollShared(false), globalRefreshSeconds() * 1e3);
+}
+async function pollShared(force = false) {
+  if (sharedPollPromise)
+    return sharedPollPromise;
+  if (!force && sharedSnapshot && Date.now() - lastPollAt < 5e3)
+    return sharedSnapshot;
+  sharedPollPromise = (async () => {
+    try {
+      sharedSnapshot = await readJarvisAi(DEFAULT_JARVISAI_URL, {});
+    } catch (err) {
+      streamDeck.logger.warn(`JarvisAI shared telemetry failed: ${err.message}`);
+      sharedSnapshot = legacySnapshot();
+    }
+    lastPollAt = Date.now();
+    renderAll();
+    return sharedSnapshot;
+  })();
+  try {
+    return await sharedPollPromise;
+  } finally {
+    sharedPollPromise = null;
+  }
+}
+async function registerRuntime(action, incomingSettings = null) {
   const id = action.id;
-  const old = runtimes.get(id);
-  if (old?.timer)
-    clearInterval(old.timer);
-  const runtime = old || { viewIndex: 0, timer: null, snapshot: null };
-  const settings = await settingsFor(action);
-  const seconds = Math.max(10, Math.min(300, num(settings.refreshSeconds, DEFAULT_REFRESH_SECONDS)));
-  await updateKey(action, runtime);
-  runtime.timer = setInterval(() => updateKey(action, runtime), seconds * 1e3);
-  runtimes.set(id, runtime);
+  const old = runtimes.get(id) || { action, settings: {}, viewIndex: 0 };
+  old.action = action;
+  old.settings = incomingSettings || await settingsFor(action);
+  runtimes.set(id, old);
+  renderAction(old);
+  armSharedTimer();
+  await pollShared(false);
 }
 var JarvisAiUsageAction = class extends SingletonAction {
   constructor() {
     super();
     this.manifestId = "com.jkkec.claude-usage.usage";
   }
-  onWillAppear(ev) {
-    startRuntime(ev.action);
+  async onWillAppear(ev) {
+    await registerRuntime(ev.action, ev.payload?.settings || null);
   }
   onWillDisappear(ev) {
-    const rt = runtimes.get(ev.action.id);
-    if (rt?.timer)
-      clearInterval(rt.timer);
     runtimes.delete(ev.action.id);
+    armSharedTimer();
   }
   async onKeyDown(ev) {
-    const rt = runtimes.get(ev.action.id) || { viewIndex: 0 };
-    const settings = await settingsFor(ev.action);
-    if ((settings.viewMode || "overview") === "cycle" && rt.snapshot) {
-      const views = availableViews(rt.snapshot);
-      rt.viewIndex = (rt.viewIndex + 1) % Math.max(1, views.length);
+    let runtime = runtimes.get(ev.action.id);
+    if (!runtime) {
+      await registerRuntime(ev.action, ev.payload?.settings || null);
+      runtime = runtimes.get(ev.action.id);
     }
-    runtimes.set(ev.action.id, rt);
-    await updateKey(ev.action, rt);
+    if ((runtime.settings?.viewMode || "overview") === "cycle" && sharedSnapshot) {
+      const views = availableViews(sharedSnapshot);
+      runtime.viewIndex = (runtime.viewIndex + 1) % Math.max(1, views.length);
+      renderAction(runtime);
+    }
+    await pollShared(true);
   }
-  onDidReceiveSettings(ev) {
-    startRuntime(ev.action);
+  async onDidReceiveSettings(ev) {
+    const runtime = runtimes.get(ev.action.id) || { action: ev.action, settings: {}, viewIndex: 0 };
+    runtime.action = ev.action;
+    runtime.settings = ev.payload?.settings || await settingsFor(ev.action);
+    runtimes.set(ev.action.id, runtime);
+    renderAction(runtime);
+    armSharedTimer();
   }
 };
 streamDeck.actions.registerAction(new JarvisAiUsageAction());
