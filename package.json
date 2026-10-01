@@ -1,7 +1,7 @@
 {
   "name": "sd-claude-usage",
-  "version": "1.0.0",
-  "description": "Stream Deck plugin showing Claude Code usage rings",
+  "version": "2.0.0",
+  "description": "Stream Deck plugin showing JarvisAI provider health, burn rate and Claude fallback usage",
   "main": "src/plugin.js",
   "scripts": {
     "build": "node build.js",
