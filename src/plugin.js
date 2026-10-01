@@ -494,11 +494,13 @@ function calendarSlots(snapshot, runtime = null) {
 function buildCalendarSvg(slot, runtime) {
   const now = Date.now();
   const event = slot?.event;
+  const staleWarning = calendarFetchedAt > 0 && Date.now() - calendarFetchedAt > 30 * 60 * 1000;
   if (!event) {
     const label = slot?.group === "ME" ? "ME" : "TEAM";
+    const ownerColour = staleWarning ? "#ff4757" : "#d8dee9";
     return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">
       <rect width="144" height="144" rx="12" fill="#10151c"/>
-      <text x="72" y="34" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="#d8dee9">${label}</text>
+      <text x="72" y="34" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="${ownerColour}">${label}</text>
       <text x="72" y="86" text-anchor="middle" font-family="Arial" font-size="34" font-weight="900" fill="#77808e">NONE</text>
       <text x="72" y="128" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="#77808e">NEXT</text>
     </svg>`;
@@ -512,7 +514,8 @@ function buildCalendarSvg(slot, runtime) {
   const under100 = mins < 100;
   const targetTime = new Date(active ? end : start);
   const clock = targetTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
-  const top = `${owner} ${active ? "ENDS" : (under100 ? "IN" : "START")}`;
+  const stateText = active ? "ENDS" : (under100 ? "IN" : "START");
+  const ownerColour = staleWarning ? "#ff4757" : fg;
   const middle = under100 ? `${mins}m` : clock;
   const summary = scrollSummary(event.summary || "UNTITLED", runtime.scrollOffset || 0, 10);
   const bg = active ? "#171208" : "#0b1620";
@@ -520,7 +523,7 @@ function buildCalendarSvg(slot, runtime) {
   const accent = active ? "#f1c40f" : "#6ec5ff";
   return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">
     <rect width="144" height="144" rx="12" fill="${bg}"/>
-    <text x="72" y="29" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="${fg}">${escXml(top)}</text>
+    <text x="72" y="29" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800"><tspan fill="${ownerColour}">${escXml(owner)}</tspan><tspan fill="${fg}"> ${escXml(stateText)}</tspan></text>
     <text x="72" y="88" text-anchor="middle" font-family="Arial" font-size="52" font-weight="900" fill="${accent}">${middle}</text>
     <text x="72" y="128" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="${fg}">${escXml(summary)}</text>
   </svg>`;
@@ -581,10 +584,6 @@ function renderCalendarAction(runtime) {
   }
   if (calendarSnapshot.offline) {
     runtime.action.setImage(svgData(buildWaitingSvg("CAL OFFLINE")));
-    return;
-  }
-  if (Date.now() - calendarFetchedAt > 600000) {
-    runtime.action.setImage(svgData(buildWaitingSvg("CAL STALE")));
     return;
   }
   const slots = calendarSlots(calendarSnapshot, runtime);
