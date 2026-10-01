@@ -1,60 +1,15 @@
 <!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>Claude Usage</title>
-  <link rel="stylesheet" href="https://sdpi-components.dev/css/sdpi.css" />
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #2d2d2d; color: #ccc; margin: 0; padding: 8px; }
-    .sdpi-wrapper { padding: 4px 16px; }
-    .sdpi-item { display: flex; align-items: center; margin: 8px 0; }
-    .sdpi-item-label { min-width: 80px; font-size: 12px; color: #999; }
-    select { flex: 1; background: #3b3b3b; color: #ccc; border: 1px solid #555; border-radius: 3px; padding: 4px 8px; font-size: 12px; }
-  </style>
-</head>
-<body>
-  <div class="sdpi-wrapper">
-    <div class="sdpi-item">
-      <div class="sdpi-item-label">Display</div>
-      <select id="displayMode">
-        <option value="auto">Auto (highest usage)</option>
-        <option value="five_hour">Session (5 Hour)</option>
-        <option value="seven_day">Weekly (7 Day)</option>
-      </select>
-    </div>
-  </div>
-
-  <script>
-    let websocket = null;
-    let uuid = null;
-    let actionInfo = null;
-    let settings = {};
-
-    function connectElgatoStreamDeckSocket(inPort, inPropertyInspectorUUID, inRegisterEvent, inInfo, inActionInfo) {
-      uuid = inPropertyInspectorUUID;
-      actionInfo = JSON.parse(inActionInfo);
-      settings = actionInfo.payload.settings || {};
-
-      // Set current value
-      const sel = document.getElementById("displayMode");
-      if (settings.displayMode) {
-        sel.value = settings.displayMode;
-      }
-
-      websocket = new WebSocket("ws://127.0.0.1:" + inPort);
-      websocket.onopen = function () {
-        websocket.send(JSON.stringify({ event: inRegisterEvent, uuid: inPropertyInspectorUUID }));
-      };
-
-      sel.addEventListener("change", function () {
-        settings.displayMode = sel.value;
-        websocket.send(JSON.stringify({
-          event: "setSettings",
-          context: uuid,
-          payload: settings
-        }));
-      });
-    }
-  </script>
-</body>
-</html>
+<html><head><meta charset="utf-8"/><title>JarvisAI Usage</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#2d2d2d;color:#ccc;margin:0;padding:8px}.wrap{padding:4px 16px}.item{display:flex;align-items:center;margin:10px 0;gap:8px}.label{width:92px;font-size:12px;color:#aaa}select,input{flex:1;min-width:0;background:#3b3b3b;color:#eee;border:1px solid #555;border-radius:3px;padding:6px;font-size:12px}.hint{font-size:11px;color:#888;line-height:1.35;margin:10px 0 0 100px}
+</style></head><body><div class="wrap">
+<div class="item"><div class="label">View</div><select id="viewMode"><option value="overview">JarvisAI overview</option><option value="cycle">Cycle providers on press</option><option value="claude">Claude</option><option value="codex">Codex / OpenAI</option><option value="gemini">Gemini</option><option value="groq">Groq</option><option value="openrouter">OpenRouter</option><option value="ollama">Ollama</option><option value="legacy">Local Claude fallback</option></select></div>
+<div class="item"><div class="label">JarvisAI URL</div><input id="jarvisAiUrl" value="http://127.0.0.1:8792"/></div>
+<div class="item"><div class="label">Refresh</div><select id="refreshSeconds"><option value="10">10 sec</option><option value="30">30 sec</option><option value="60">1 min</option><option value="300">5 min</option></select></div>
+<div class="item"><div class="label">Legacy view</div><select id="displayMode"><option value="auto">Highest usage</option><option value="five_hour">Session (5h)</option><option value="seven_day">Weekly (7d)</option></select></div>
+<div class="hint">JarvisAI telemetry is provided by the supervised Home1 bridge through a localhost reverse tunnel. All Stream Deck keys share one poller; no JarvisAI credential is stored in this plugin. Local Claude data is the fallback.</div>
+</div><script>
+let ws=null,uuid=null,settings={};
+function connectElgatoStreamDeckSocket(port,piUuid,registerEvent,info,actionInfo){uuid=piUuid;const ai=JSON.parse(actionInfo);settings=ai.payload.settings||{};const defaults={viewMode:'overview',jarvisAiUrl:'http://127.0.0.1:8792',refreshSeconds:'30',displayMode:'auto'};for(const [id,v] of Object.entries(defaults)){const el=document.getElementById(id);el.value=settings[id]||v;el.addEventListener('change',save);el.addEventListener('input',()=>{if(id==='jarvisAiUrl')clearTimeout(el._t),el._t=setTimeout(save,400)});}ws=new WebSocket('ws://127.0.0.1:'+port);ws.onopen=()=>ws.send(JSON.stringify({event:registerEvent,uuid:piUuid}));}
+function save(){for(const id of ['viewMode','jarvisAiUrl','refreshSeconds','displayMode'])settings[id]=document.getElementById(id).value;if(ws&&ws.readyState===1)ws.send(JSON.stringify({event:'setSettings',context:uuid,payload:settings}));}
+</script></body></html>

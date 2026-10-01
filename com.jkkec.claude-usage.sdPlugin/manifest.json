@@ -1,11 +1,11 @@
 {
-  "Name": "Claude Usage",
-  "Version": "1.0.0",
+  "Name": "JarvisAI Usage",
+  "Version": "2.0.0",
   "Author": "jkkec",
-  "Description": "Shows Claude Code CLI usage with dual rings and reset timer",
+  "Description": "Shows JarvisAI provider health, burn rate, activity and Claude fallback usage",
   "Icon": "imgs/plugin",
   "CodePath": "bin/plugin.js",
-  "Category": "Claude",
+  "Category": "JarvisAI",
   "CategoryIcon": "imgs/plugin",
   "UUID": "com.jkkec.claude-usage",
   "SDKVersion": 2,
@@ -24,11 +24,11 @@
   },
   "Actions": [
     {
-      "Name": "Claude Usage",
+      "Name": "JarvisAI Usage",
       "UUID": "com.jkkec.claude-usage.usage",
       "Icon": "imgs/actions/usage/icon",
       "PropertyInspectorPath": "ui/property-inspector.html",
-      "Tooltip": "Shows Claude Code usage rings and reset timer",
+      "Tooltip": "Shows JarvisAI provider fleet health and usage",
       "States": [
         {
           "Image": "imgs/actions/usage/icon",
