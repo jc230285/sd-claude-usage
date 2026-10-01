@@ -35,6 +35,19 @@
           "TitleAlignment": "middle"
         }
       ]
+    },
+    {
+      "Name": "Calendar Agenda",
+      "UUID": "com.jkkec.claude-usage.calendar",
+      "Icon": "imgs/actions/usage/icon",
+      "PropertyInspectorPath": "ui/calendar-inspector.html",
+      "Tooltip": "Next meetings from Scale42 Home",
+      "States": [
+        {
+          "Image": "imgs/actions/usage/icon",
+          "TitleAlignment": "middle"
+        }
+      ]
     }
   ]
 }
