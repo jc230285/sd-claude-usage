@@ -429,5 +429,188 @@ class JarvisAiUsageAction extends SingletonAction {
   }
 }
 
+
+const CALENDAR_BASES = [
+  "http://100.96.106.91:34722",
+  "http://100.68.255.98:34721",
+  "http://100.65.171.119:34721",
+];
+const calendarRuntimes = new Map();
+let calendarSnapshot = null;
+let calendarFetchedAt = 0;
+let calendarFetchPromise = null;
+let calendarTimer = null;
+
+function escXml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function calendarOwner(event) {
+  if (event?.mine) return "ME";
+  const raw = String(event?.calendarUser || event?.organizer || "TEAM");
+  const local = raw.split("@")[0] || "TEAM";
+  return local.split(/[._-]/)[0].slice(0, 9).toUpperCase() || "TEAM";
+}
+
+function scrollSummary(text, offset, width = 10) {
+  const clean = String(text || "UNTITLED").replace(/\s+/g, " ").trim().toUpperCase();
+  if (clean.length <= width) return clean;
+  const loop = clean + "   ";
+  const doubled = loop + loop;
+  const i = offset % loop.length;
+  return doubled.slice(i, i + width);
+}
+
+function ceilMinutes(ms) {
+  return Math.max(0, Math.ceil(ms / 60000));
+}
+
+function calendarSlots(snapshot) {
+  const now = Date.now();
+  const events = (snapshot?.events || [])
+    .filter((e) => !e.allDay && e.start && e.end && Date.parse(e.end) > now)
+    .sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+  const mine = events.filter((e) => e.mine).slice(0, 2);
+  const team = events.filter((e) => !e.mine).slice(0, 2);
+  return [
+    { group: "ME", ordinal: 0, event: mine[0] || null },
+    { group: "ME", ordinal: 1, event: mine[1] || null },
+    { group: "TEAM", ordinal: 0, event: team[0] || null },
+    { group: "TEAM", ordinal: 1, event: team[1] || null },
+  ];
+}
+
+function buildCalendarSvg(slot, runtime) {
+  const now = Date.now();
+  const event = slot?.event;
+  if (!event) {
+    const label = slot?.group === "ME" ? "ME" : "TEAM";
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">
+      <rect width="144" height="144" rx="12" fill="#10151c"/>
+      <text x="72" y="34" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="#d8dee9">${label}</text>
+      <text x="72" y="86" text-anchor="middle" font-family="Arial" font-size="34" font-weight="900" fill="#77808e">NONE</text>
+      <text x="72" y="128" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="#77808e">NEXT</text>
+    </svg>`;
+  }
+
+  const start = Date.parse(event.start);
+  const end = Date.parse(event.end);
+  const active = start <= now && now < end;
+  const mins = active ? ceilMinutes(end - now) : ceilMinutes(start - now);
+  const owner = calendarOwner(event);
+  const top = `${owner} ${active ? "ENDS" : "IN"}`;
+  const summary = scrollSummary(event.summary || "UNTITLED", runtime.scrollOffset || 0, 10);
+  const bg = active ? "#171208" : "#0b1620";
+  const fg = active ? "#ffe7a3" : "#d7efff";
+  const accent = active ? "#f1c40f" : "#6ec5ff";
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">
+    <rect width="144" height="144" rx="12" fill="${bg}"/>
+    <text x="72" y="29" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="${fg}">${escXml(top)}</text>
+    <text x="72" y="88" text-anchor="middle" font-family="Arial" font-size="52" font-weight="900" fill="${accent}">${mins}m</text>
+    <text x="72" y="128" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="${fg}">${escXml(summary)}</text>
+  </svg>`;
+}
+
+function renderCalendarAction(runtime) {
+  if (!calendarSnapshot) {
+    runtime.action.setImage(svgData(buildWaitingSvg("CALENDAR")));
+    return;
+  }
+  if (calendarSnapshot.offline) {
+    runtime.action.setImage(svgData(buildWaitingSvg("CAL OFFLINE")));
+    return;
+  }
+  if (Date.now() - calendarFetchedAt > 120000) {
+    runtime.action.setImage(svgData(buildWaitingSvg("CAL STALE")));
+    return;
+  }
+  const slots = calendarSlots(calendarSnapshot);
+  runtime.pageIndex = Math.max(0, Math.min(runtime.pageIndex || 0, slots.length - 1));
+  runtime.action.setImage(svgData(buildCalendarSvg(slots[runtime.pageIndex], runtime)));
+}
+
+function renderAllCalendar() {
+  for (const runtime of calendarRuntimes.values()) renderCalendarAction(runtime);
+}
+
+async function fetchCalendarSnapshot() {
+  let lastErr = null;
+  for (const base of CALENDAR_BASES) {
+    try {
+      const data = await fetchJson(base + "/api/calendar", "", 3500);
+      if (!Array.isArray(data?.events)) throw new Error("calendar payload missing events");
+      return { ...data, source: base };
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error("calendar unavailable");
+}
+
+async function pollCalendar(force = false) {
+  if (calendarFetchPromise) return calendarFetchPromise;
+  if (!force && calendarSnapshot && Date.now() - calendarFetchedAt < 30000) return calendarSnapshot;
+  calendarFetchPromise = (async () => {
+    try {
+      calendarSnapshot = await fetchCalendarSnapshot();
+      calendarFetchedAt = Date.now();
+    } catch (err) {
+      streamDeck.logger.warn(`Calendar telemetry failed: ${err.message}`);
+      if (!calendarSnapshot) calendarSnapshot = { offline: true, events: [], error: err.message };
+    }
+    renderAllCalendar();
+    return calendarSnapshot;
+  })();
+  try { return await calendarFetchPromise; }
+  finally { calendarFetchPromise = null; }
+}
+
+function armCalendarTimer() {
+  if (calendarTimer) clearInterval(calendarTimer);
+  if (!calendarRuntimes.size) { calendarTimer = null; return; }
+  calendarTimer = setInterval(() => {
+    for (const runtime of calendarRuntimes.values()) {
+      runtime.tick = (runtime.tick || 0) + 1;
+      runtime.scrollOffset = (runtime.scrollOffset || 0) + 1;
+      if (runtime.tick % 5 === 0) runtime.pageIndex = ((runtime.pageIndex || 0) + 1) % 4;
+      renderCalendarAction(runtime);
+    }
+    pollCalendar(false);
+  }, 1000);
+}
+
+class CalendarAgendaAction extends SingletonAction {
+  constructor() { super(); this.manifestId = "com.jkkec.claude-usage.calendar"; }
+
+  async onWillAppear(ev) {
+    const runtime = calendarRuntimes.get(ev.action.id) || { action: ev.action, pageIndex: 0, scrollOffset: 0, tick: 0 };
+    runtime.action = ev.action;
+    calendarRuntimes.set(ev.action.id, runtime);
+    renderCalendarAction(runtime);
+    armCalendarTimer();
+    await pollCalendar(false);
+  }
+
+  onWillDisappear(ev) {
+    calendarRuntimes.delete(ev.action.id);
+    armCalendarTimer();
+  }
+
+  async onKeyDown(ev) {
+    const runtime = calendarRuntimes.get(ev.action.id);
+    if (!runtime) return;
+    runtime.pageIndex = ((runtime.pageIndex || 0) + 1) % 4;
+    runtime.scrollOffset = 0;
+    runtime.tick = 0;
+    renderCalendarAction(runtime);
+    await pollCalendar(true);
+  }
+}
+
 streamDeck.actions.registerAction(new JarvisAiUsageAction());
+streamDeck.actions.registerAction(new CalendarAgendaAction());
 streamDeck.connect();
