@@ -5,7 +5,8 @@ const os = require("os");
 const { execFileSync } = require("child_process");
 
 const RATE_LIMITS_PATH = path.join(os.homedir(), ".claude", "rate_limits.json");
-const DEFAULT_JARVISAI_URL = "http://127.0.0.1:8792";
+const DEFAULT_JARVISAI_URL = "http://100.96.106.91:8792";
+const LOGIN_PAGE_BASE = "https://jarvis.viresinnumeris.co.uk/ai-login";
 const TOKEN_VAULT_KEY = "JARVIS_AGENT_PROXY_KEY";
 const DEFAULT_REFRESH_SECONDS = 30;
 const PROVIDER_ORDER = ["claude", "codex", "gemini", "groq", "openrouter", "ollama"];
@@ -230,38 +231,46 @@ function arc(cx, cy, r, pct) {
 
 function buildOverviewSvg(snapshot) {
   const t = snapshot.totals;
-  const providers = Object.values(snapshot.providers);
-  const burns = providers.map((p) => p.burnPct).filter((v) => v !== null && Number.isFinite(v));
-  const maxBurn = burns.length ? Math.max(...burns) : 0;
-  const health = t.attention > 0 ? tone({ connected: 1, attention: 1, burnPct: maxBurn }) : tone({ connected: t.connected, attention: 0, burnPct: maxBurn });
-  const providerCount = providers.length;
+  const claude = snapshot.providers?.claude;
+  const burn = claude?.burnPct;
+  const health = tone(claude || { connected: t.connected, attention: t.attention, burnPct: 0 });
+  const loginCount = Array.isArray(snapshot.loginActions) ? snapshot.loginActions.length : 0;
+  const value = burn === null || burn === undefined ? "—" : `${Math.round(burn)}%`;
+  const footer = loginCount ? `${loginCount} LOGIN${loginCount === 1 ? "" : "S"}` : `JARVIS ${t.usable}/${t.accounts} READY`;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">
     <rect width="144" height="144" rx="12" fill="${health.bg}"/>
-    <text x="72" y="20" text-anchor="middle" font-family="Arial" font-size="12" font-weight="700" fill="${health.fg}">JARVIS AI</text>
-    <text x="72" y="56" text-anchor="middle" font-family="Arial" font-size="28" font-weight="800" fill="${health.ring}">${t.usable}/${t.connected}</text>
-    <text x="72" y="74" text-anchor="middle" font-family="Arial" font-size="10" fill="${health.fg}">usable / connected</text>
-    <text x="72" y="96" text-anchor="middle" font-family="Arial" font-size="11" font-weight="700" fill="${health.fg}">${providerCount} providers · ${t.inflight} live</text>
-    <text x="72" y="114" text-anchor="middle" font-family="Arial" font-size="10" fill="${health.fg}">${compact(t.requests)} req · ${compact(t.input + t.output)} tok</text>
-    <text x="72" y="132" text-anchor="middle" font-family="Arial" font-size="9" fill="${health.fg}">${t.attention ? `${t.attention} need attention` : `max burn ${Math.round(maxBurn)}%`}</text>
+    <text x="72" y="24" text-anchor="middle" font-family="Arial" font-size="14" font-weight="800" fill="${health.fg}">CLAUDE 7D AVG</text>
+    <text x="72" y="88" text-anchor="middle" font-family="Arial" font-size="54" font-weight="900" fill="${health.ring}">${value}</text>
+    <text x="72" y="124" text-anchor="middle" font-family="Arial" font-size="14" font-weight="800" fill="${health.fg}">${footer}</text>
   </svg>`;
 }
-
 function buildProviderSvg(p) {
   if (!p) return buildWaitingSvg("NO DATA");
   const c = tone(p);
   const burn = p.burnPct === null ? null : Math.max(0, p.burnPct);
-  const shown = burn === null ? Math.round((p.usable / Math.max(1, p.connected)) * 100) : Math.round(burn);
   const label = PROVIDER_LABELS[p.kind] || String(p.kind || "AI").toUpperCase().slice(0, 7);
+  const top = p.kind === "claude" ? "CLAUDE 7D AVG" : label;
+  const value = burn === null ? `${p.usable}/${p.connected}` : `${Math.round(burn)}%`;
+  const bottom = p.attention ? `${p.attention} LOGIN${p.attention === 1 ? "" : "S"}` : `${p.usable}/${p.connected} READY`;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">
     <rect width="144" height="144" rx="12" fill="${c.bg}"/>
-    <circle cx="72" cy="66" r="48" fill="none" stroke="#26303a" stroke-width="8"/>
-    <path d="${arc(72, 66, 48, Math.min(shown, 100))}" fill="none" stroke="${c.ring}" stroke-width="8" stroke-linecap="round"/>
-    <text x="72" y="22" text-anchor="middle" font-family="Arial" font-size="11" font-weight="700" fill="${c.fg}">${label}</text>
-    <text x="72" y="62" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="${c.ring}">${burn === null ? `${p.usable}/${p.connected}` : `${Math.round(burn)}%`}</text>
-    <text x="72" y="79" text-anchor="middle" font-family="Arial" font-size="9" fill="${c.fg}">${burn === null ? "usable" : "burn rate"}</text>
-    <text x="72" y="103" text-anchor="middle" font-family="Arial" font-size="10" font-weight="700" fill="${c.fg}">${p.usable}/${p.connected} ready · ${p.inflight} live</text>
-    <text x="72" y="120" text-anchor="middle" font-family="Arial" font-size="9" fill="${c.fg}">${compact(p.requests)} req · ${compact(p.input + p.output)} tok</text>
-    <text x="72" y="136" text-anchor="middle" font-family="Arial" font-size="9" font-weight="700" fill="${c.ring}">${c.state}${p.attention ? ` · ${p.attention} FIX` : ""}</text>
+    <circle cx="72" cy="70" r="51" fill="none" stroke="#26303a" stroke-width="8"/>
+    <path d="${arc(72,70,51,Math.min(burn ?? (p.usable/Math.max(1,p.connected))*100,100))}" fill="none" stroke="${c.ring}" stroke-width="8" stroke-linecap="round"/>
+    <text x="72" y="24" text-anchor="middle" font-family="Arial" font-size="14" font-weight="800" fill="${c.fg}">${top}</text>
+    <text x="72" y="88" text-anchor="middle" font-family="Arial" font-size="50" font-weight="900" fill="${c.ring}">${value}</text>
+    <text x="72" y="126" text-anchor="middle" font-family="Arial" font-size="14" font-weight="800" fill="${c.fg}">${bottom}</text>
+  </svg>`;
+}
+
+function buildLoginSvg(snapshot) {
+  const actions = Array.isArray(snapshot?.loginActions) ? snapshot.loginActions : [];
+  const count = actions.length;
+  const c = count ? {bg:'#321014',fg:'#ffd0d4',ring:'#ff4757'} : {bg:'#071d16',fg:'#b9ffe3',ring:'#2ed573'};
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">
+    <rect width="144" height="144" rx="12" fill="${c.bg}"/>
+    <text x="72" y="26" text-anchor="middle" font-family="Arial" font-size="14" font-weight="800" fill="${c.fg}">ACCOUNT LOGINS</text>
+    <text x="72" y="91" text-anchor="middle" font-family="Arial" font-size="58" font-weight="900" fill="${c.ring}">${count}</text>
+    <text x="72" y="126" text-anchor="middle" font-family="Arial" font-size="14" font-weight="800" fill="${c.fg}">${count ? 'PRESS TO LOGIN' : 'ALL SIGNED IN'}</text>
   </svg>`;
 }
 
@@ -308,17 +317,20 @@ function availableViews(snapshot) {
 function renderAction(runtime) {
   const action = runtime.action;
   const settings = runtime.settings || {};
-  const snapshot = sharedSnapshot || legacySnapshot();
+  const snapshot = sharedSnapshot;
   if (!snapshot) { action.setImage(svgData(buildWaitingSvg())); return; }
+  if (snapshot.offline) { action.setImage(svgData(buildWaitingSvg("JARVIS OFFLINE"))); return; }
 
   let view = settings.viewMode || "overview";
   if (view === "cycle") {
     const views = availableViews(snapshot);
-    runtime.viewIndex = Math.max(0, Math.min(runtime.viewIndex || 0, views.length - 1));
-    view = views[runtime.viewIndex];
+    const saved = settings.cycleView;
+    view = views.includes(saved) ? saved : views[0];
   }
   if (view === "legacy") {
     action.setImage(svgData(buildLegacySvg(legacySnapshot(), settings.displayMode || "auto")));
+  } else if (view === "login_attention") {
+    action.setImage(svgData(buildLoginSvg(snapshot)));
   } else if (view === "overview") {
     action.setImage(svgData(buildOverviewSvg(snapshot)));
   } else {
@@ -354,7 +366,7 @@ async function pollShared(force = false) {
       sharedSnapshot = await readJarvisAi(DEFAULT_JARVISAI_URL, {});
     } catch (err) {
       streamDeck.logger.warn(`JarvisAI shared telemetry failed: ${err.message}`);
-      sharedSnapshot = legacySnapshot();
+      sharedSnapshot = { source: "offline", offline: true, error: err.message, providers: {}, loginActions: [], totals: { accounts: 0, connected: 0, usable: 0, requests: 0, input: 0, output: 0, inflight: 0, cost: 0, attention: 0 } };
     }
     lastPollAt = Date.now();
     renderAll();
@@ -394,10 +406,18 @@ class JarvisAiUsageAction extends SingletonAction {
       await registerRuntime(ev.action, ev.payload?.settings || null);
       runtime = runtimes.get(ev.action.id);
     }
-    if ((runtime.settings?.viewMode || "overview") === "cycle" && sharedSnapshot) {
+    const mode = runtime.settings?.viewMode || "overview";
+    if (mode === "cycle" && sharedSnapshot) {
       const views = availableViews(sharedSnapshot);
-      runtime.viewIndex = (runtime.viewIndex + 1) % Math.max(1, views.length);
+      const current = views.includes(runtime.settings?.cycleView) ? runtime.settings.cycleView : views[0];
+      const next = views[(views.indexOf(current) + 1) % Math.max(1, views.length)];
+      runtime.settings = { ...runtime.settings, cycleView: next };
+      await runtime.action.setSettings(runtime.settings);
       renderAction(runtime);
+    } else if (mode === "login_attention" && sharedSnapshot) {
+      const actions = Array.isArray(sharedSnapshot.loginActions) ? sharedSnapshot.loginActions : [];
+      const url = actions.length === 1 ? actions[0].url : LOGIN_PAGE_BASE;
+      if (actions.length) await streamDeck.system.openUrl(url);
     }
     await pollShared(true);
   }
