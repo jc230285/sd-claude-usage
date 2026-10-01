@@ -4,164 +4,327 @@ const path = require("path");
 const os = require("os");
 
 const RATE_LIMITS_PATH = path.join(os.homedir(), ".claude", "rate_limits.json");
-const UPDATE_MS = 5 * 60 * 1000;
+const DEFAULT_JARVISAI_URL = "http://127.0.0.1:8791";
+const DEFAULT_REFRESH_SECONDS = 30;
+const PROVIDER_ORDER = ["claude", "codex", "gemini", "groq", "openrouter", "ollama"];
+const PROVIDER_LABELS = {
+  claude: "CLAUDE",
+  codex: "CODEX",
+  gemini: "GEMINI",
+  groq: "GROQ",
+  openrouter: "OPENR",
+  ollama: "OLLAMA",
+};
+
+function num(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
 
 function readRateLimits() {
+  try { return JSON.parse(fs.readFileSync(RATE_LIMITS_PATH, "utf8")); }
+  catch { return null; }
+}
+
+async function fetchJson(url, timeoutMs = 2500) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    return JSON.parse(fs.readFileSync(RATE_LIMITS_PATH, "utf8"));
-  } catch {
-    return null;
+    const res = await fetch(url, { headers: { accept: "application/json" }, cache: "no-store", signal: ctrl.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } finally { clearTimeout(timer); }
+}
+
+function providerKind(row = {}) {
+  const raw = String(row.kind || row.provider || row.providerId || row.provider_id || "").toLowerCase();
+  if (raw.includes("anthropic") || raw.includes("claude")) return "claude";
+  if (raw.includes("openai") || raw.includes("codex") || raw.includes("gpt")) return "codex";
+  if (raw.includes("google") || raw.includes("gemini")) return "gemini";
+  if (raw.includes("groq")) return "groq";
+  if (raw.includes("openrouter")) return "openrouter";
+  if (raw.includes("ollama")) return "ollama";
+  return raw || "unknown";
+}
+
+function rowBurnPct(row = {}) {
+  const burn = row.burn || {};
+  const direct = [
+    row.weekly_burn_rate_pct, row.burn_rate_pct, row.burnRatePct,
+    burn.weekly_burn_rate_pct, burn.burn_rate_pct,
+  ].map(Number).find(Number.isFinite);
+  if (Number.isFinite(direct)) return direct;
+
+  const weekly = burn.weekly || row.weekly || {};
+  let max = null;
+  for (const win of Object.values(weekly)) {
+    const used = num(win?.used_pct ?? win?.used_percentage, NaN);
+    const elapsed = num(win?.time_elapsed_pct, NaN);
+    if (Number.isFinite(used) && Number.isFinite(elapsed) && elapsed > 0) {
+      const rate = (used / elapsed) * 100;
+      max = max === null ? rate : Math.max(max, rate);
+    } else if (Number.isFinite(used)) {
+      max = max === null ? used : Math.max(max, used);
+    }
   }
+  return max;
+}
+
+function normalizeDashboard(data = {}) {
+  const rows = Array.isArray(data.accounts) ? data.accounts : [];
+  const groups = new Map();
+  for (const row of rows) {
+    const kind = providerKind(row);
+    if (!PROVIDER_ORDER.includes(kind)) continue;
+    if (!groups.has(kind)) groups.set(kind, []);
+    groups.get(kind).push(row);
+  }
+
+  const providers = {};
+  for (const kind of PROVIDER_ORDER) {
+    const list = groups.get(kind) || [];
+    if (!list.length) continue;
+    const connected = list.filter((r) => r.connected !== false && r.enabled !== false).length;
+    const usable = list.filter((r) => {
+      const burn = rowBurnPct(r);
+      return r.connected !== false && r.enabled !== false && !r.cooldown?.cooling && !r.cooling && !r.human_attention && (burn === null || burn < 100);
+    }).length;
+    const burns = list.map(rowBurnPct).filter((v) => v !== null && Number.isFinite(v));
+    const requests = list.reduce((n, r) => n + num(r.observed_requests ?? r.burn?.requests ?? r.requests), 0);
+    const input = list.reduce((n, r) => n + num(r.input_tokens ?? r.burn?.input_tokens ?? r.usage?.inputTokens), 0);
+    const output = list.reduce((n, r) => n + num(r.output_tokens ?? r.burn?.output_tokens ?? r.usage?.outputTokens), 0);
+    const inflight = list.reduce((n, r) => n + num(r.in_flight ?? r.inFlight), 0);
+    const cost = list.reduce((n, r) => n + num(r.cost_usd ?? r.burn?.cost_usd ?? r.costUsd), 0);
+    const capacity = list.reduce((n, r) => n + num(r.capacity_multiplier ?? r.multiplier, 1), 0);
+    const attention = list.filter((r) => r.human_attention || r.status?.needs_relogin || r.status?.needs_reauth || r.status?.key_missing_reason).length;
+    providers[kind] = {
+      kind, accounts: list.length, connected, usable, capacity, requests, input, output, inflight, cost, attention,
+      burnPct: burns.length ? burns.reduce((a, b) => a + b, 0) / burns.length : null,
+      lowestBurnPct: burns.length ? Math.min(...burns) : null,
+    };
+  }
+
+  const totals = data.totals || {};
+  const providerValues = Object.values(providers);
+  return {
+    source: "jarvisai",
+    generatedAt: data.generated_at || data.generatedAt || new Date().toISOString(),
+    providers,
+    totals: {
+      accounts: providerValues.reduce((n, p) => n + p.accounts, 0),
+      connected: providerValues.reduce((n, p) => n + p.connected, 0),
+      usable: providerValues.reduce((n, p) => n + p.usable, 0),
+      requests: num(totals.requests, providerValues.reduce((n, p) => n + p.requests, 0)),
+      input: num(totals.input_tokens ?? totals.inputTokens, providerValues.reduce((n, p) => n + p.input, 0)),
+      output: num(totals.output_tokens ?? totals.outputTokens, providerValues.reduce((n, p) => n + p.output, 0)),
+      inflight: num(totals.in_flight ?? totals.inFlight, providerValues.reduce((n, p) => n + p.inflight, 0)),
+      cost: num(totals.cost_usd ?? totals.costUsd, providerValues.reduce((n, p) => n + p.cost, 0)),
+      attention: providerValues.reduce((n, p) => n + p.attention, 0),
+    },
+  };
+}
+
+async function readJarvisAi(baseUrl) {
+  const base = String(baseUrl || DEFAULT_JARVISAI_URL).replace(/\/+$/, "");
+  const paths = ["/dashboard/data", "/api/dashboard/data"];
+  let lastError = null;
+  for (const p of paths) {
+    try {
+      const data = await fetchJson(base + p);
+      const normalized = normalizeDashboard(data);
+      if (normalized.totals.accounts || Object.keys(normalized.providers).length) return normalized;
+    } catch (err) { lastError = err; }
+  }
+  throw lastError || new Error("JarvisAI telemetry unavailable");
 }
 
 function timeUntil(epochSec) {
   const ms = epochSec * 1000 - Date.now();
-  if (ms <= 0) return { value: 0, unit: "h" };
+  if (ms <= 0) return "now";
   const hours = ms / 3600000;
-  if (hours >= 48) {
-    return { value: Math.round(hours / 24 * 10) / 10, unit: "d" };
-  }
-  return { value: Math.round(hours * 10) / 10, unit: "h" };
+  return hours >= 48 ? `${Math.round(hours / 24 * 10) / 10}d` : `${Math.round(hours * 10) / 10}h`;
 }
 
-// Draws arc that fills from bottom upward, 0% at bottom, 100% at top
-function describeArc(cx, cy, r, pct) {
-  const angle = Math.min(Math.max(pct * 3.6, 1), 359.9);
-  // 0 deg = 12 o'clock (top). We want 100% to end at top (0 deg).
-  // Start: 0 - angle (goes backwards from top), End: 0 (top)
-  // At low %, the arc is a small sliver near the top... that's wrong.
-  // We want: start at bottom, fill up both sides, meet at top.
-  // So: start at (180 + angle/2), sweep clockwise to (180 - angle/2)
-  // This spreads symmetrically from bottom upward on both sides.
-  const half = angle / 2;
-  const startDeg = 180 + half;
-  const endDeg = 180 - half;
-  const rad = (deg) => ((deg - 90) * Math.PI) / 180;
-  const x1 = cx + r * Math.cos(rad(startDeg));
-  const y1 = cy + r * Math.sin(rad(startDeg));
-  const x2 = cx + r * Math.cos(rad(endDeg));
-  const y2 = cy + r * Math.sin(rad(endDeg));
-  // Sweep goes clockwise from start to end (the short way round when <180, long way when >180)
-  // But startDeg > endDeg so clockwise sweep goes the long way round = through the top
-  const largeArc = angle > 180 ? 1 : 0;
-  // Sweep flag 0 = counter-clockwise (from start, goes up through top to end)
-  return `M ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 0 ${x2} ${y2}`;
-}
-
-function buildSvg(data, displayMode) {
-  const size = 144;
-  const cx = size / 2;
-  const cy = size / 2;
-
-  if (!data || (!data.five_hour && !data.seven_day)) {
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">
-      <rect width="${size}" height="${size}" fill="#000000" rx="12"/>
-      <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central"
-            font-family="Arial,sans-serif" font-size="14" fill="#888">Waiting...</text>
-    </svg>`;
-  }
-
-  const fiveH = data.five_hour || {};
-  const sevenD = data.seven_day || {};
-  const fiveHPct = fiveH.used_percentage || 0;
-  const sevenDPct = sevenD.used_percentage || 0;
-
-  let usedPct, resetAt, label;
-  const mode = displayMode || "auto";
-
-  if (mode === "five_hour") {
-    usedPct = fiveHPct;
-    resetAt = fiveH.resets_at || 0;
-    label = "5H";
-  } else if (mode === "seven_day") {
-    usedPct = sevenDPct;
-    resetAt = sevenD.resets_at || 0;
-    label = "7D";
-  } else {
-    // auto: pick whichever is higher
-    if (fiveHPct >= sevenDPct) {
-      usedPct = fiveHPct;
-      resetAt = fiveH.resets_at || 0;
-      label = "5H";
-    } else {
-      usedPct = sevenDPct;
-      resetAt = sevenD.resets_at || 0;
-      label = "7D";
-    }
-  }
-
-  const time = timeUntil(resetAt);
-  // Time elapsed as % of the window (5h = 18000s, 7d = 604800s)
-  const windowSec = label === "5H" ? 5 * 3600 : 7 * 24 * 3600;
-  const secsLeft = Math.max((resetAt * 1000 - Date.now()) / 1000, 0);
-  const timeElapsedPct = Math.min(((windowSec - secsLeft) / windowSec) * 100, 100);
-
-  // Session (5H) = red, Weekly (7D) = green, time = blue
-  const usedColor = label === "5H" ? "#ff4757" : "#2ed573";
-  const remainColor = "#3b9dff";
-  const bgRing = "#2f3542";
-  const timeColor = "#3b9dff";
-  const bgColor = usedPct > timeElapsedPct ? "#6b0000" : "#000000";
-
-  const outerR = 62;
-  const innerR = 47;
-  const sw = 10;
-
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">
-  <rect width="${size}" height="${size}" fill="${bgColor}" rx="12"/>
-  <circle cx="${cx}" cy="${cy}" r="${outerR}" fill="none" stroke="${bgRing}" stroke-width="${sw}"/>
-  <path d="${describeArc(cx, cy, outerR, usedPct)}" fill="none" stroke="${usedColor}" stroke-width="${sw}" stroke-linecap="round"/>
-  <circle cx="${cx}" cy="${cy}" r="${innerR}" fill="none" stroke="${bgRing}" stroke-width="${sw}"/>
-  <path d="${describeArc(cx, cy, innerR, timeElapsedPct)}" fill="none" stroke="${remainColor}" stroke-width="${sw}" stroke-linecap="round"/>
-  <text x="${cx}" y="${cy - 16}" text-anchor="middle" dominant-baseline="central" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="${usedColor}">${label}</text>
-  <text x="${cx}" y="${cy + 4}" text-anchor="middle" dominant-baseline="central" font-family="Arial,sans-serif" font-size="24" font-weight="bold" fill="${timeColor}">${time.value}${time.unit}</text>
-  <text x="${cx}" y="${cy + 22}" text-anchor="middle" dominant-baseline="central" font-family="Arial,sans-serif" font-size="11" fill="${usedColor}">${Math.round(usedPct)}% used</text>
-</svg>`;
-}
-
-function svgToBase64(svg) {
-  return "data:image/svg+xml;base64," + Buffer.from(svg).toString("base64");
-}
-
-async function updateKey(action) {
+function legacySnapshot() {
   const data = readRateLimits();
-  let displayMode = "auto";
-  try {
-    const s = await action.getSettings();
-    displayMode = s.displayMode || "auto";
-  } catch {}
-  const svg = buildSvg(data, displayMode);
-  action.setImage(svgToBase64(svg));
+  if (!data) return null;
+  const five = data.five_hour || {};
+  const seven = data.seven_day || {};
+  return {
+    source: "local-claude",
+    providers: {
+      claude: {
+        kind: "claude", accounts: 1, connected: 1, usable: 1, capacity: 1,
+        burnPct: Math.max(num(five.used_percentage), num(seven.used_percentage)),
+        fivePct: num(five.used_percentage), weeklyPct: num(seven.used_percentage),
+        reset: Math.max(num(five.resets_at), num(seven.resets_at)),
+        requests: 0, input: 0, output: 0, inflight: 0, cost: 0, attention: 0,
+      },
+    },
+    totals: { accounts: 1, connected: 1, usable: 1, requests: 0, input: 0, output: 0, inflight: 0, cost: 0, attention: 0 },
+  };
 }
 
-const intervals = new Map();
+function compact(n) {
+  n = num(n);
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1)}b`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}m`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
+  return String(Math.round(n));
+}
 
-class ClaudeUsageAction extends SingletonAction {
-  constructor() {
-    super();
-    this.manifestId = "com.jkkec.claude-usage.usage";
+function tone(p) {
+  if (!p || p.connected === 0) return { bg: "#14171d", fg: "#77808e", ring: "#4b5563", state: "OFF" };
+  if (p.attention > 0) return { bg: "#321014", fg: "#ffb4bc", ring: "#ff4757", state: "FIX" };
+  if (p.burnPct !== null && p.burnPct >= 120) return { bg: "#420b0b", fg: "#ffd0d0", ring: "#ff3344", state: "STOP" };
+  if (p.burnPct !== null && p.burnPct >= 100) return { bg: "#37130a", fg: "#ffd8c2", ring: "#ff7b32", state: "HOLD" };
+  if (p.burnPct !== null && p.burnPct >= 80) return { bg: "#2e2607", fg: "#fff0a6", ring: "#f1c40f", state: "HIGH" };
+  return { bg: "#071d16", fg: "#b9ffe3", ring: "#2ed573", state: "READY" };
+}
+
+function arc(cx, cy, r, pct) {
+  const v = Math.max(0.01, Math.min(99.99, num(pct)));
+  const angle = v * 3.6;
+  const start = -90;
+  const end = start + angle;
+  const rad = (d) => d * Math.PI / 180;
+  const x1 = cx + r * Math.cos(rad(start));
+  const y1 = cy + r * Math.sin(rad(start));
+  const x2 = cx + r * Math.cos(rad(end));
+  const y2 = cy + r * Math.sin(rad(end));
+  return `M ${x1} ${y1} A ${r} ${r} 0 ${angle > 180 ? 1 : 0} 1 ${x2} ${y2}`;
+}
+
+function buildOverviewSvg(snapshot) {
+  const t = snapshot.totals;
+  const providers = Object.values(snapshot.providers);
+  const burns = providers.map((p) => p.burnPct).filter((v) => v !== null && Number.isFinite(v));
+  const maxBurn = burns.length ? Math.max(...burns) : 0;
+  const health = t.attention > 0 ? tone({ connected: 1, attention: 1, burnPct: maxBurn }) : tone({ connected: t.connected, attention: 0, burnPct: maxBurn });
+  const providerCount = providers.length;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">
+    <rect width="144" height="144" rx="12" fill="${health.bg}"/>
+    <text x="72" y="20" text-anchor="middle" font-family="Arial" font-size="12" font-weight="700" fill="${health.fg}">JARVIS AI</text>
+    <text x="72" y="56" text-anchor="middle" font-family="Arial" font-size="28" font-weight="800" fill="${health.ring}">${t.usable}/${t.connected}</text>
+    <text x="72" y="74" text-anchor="middle" font-family="Arial" font-size="10" fill="${health.fg}">usable / connected</text>
+    <text x="72" y="96" text-anchor="middle" font-family="Arial" font-size="11" font-weight="700" fill="${health.fg}">${providerCount} providers · ${t.inflight} live</text>
+    <text x="72" y="114" text-anchor="middle" font-family="Arial" font-size="10" fill="${health.fg}">${compact(t.requests)} req · ${compact(t.input + t.output)} tok</text>
+    <text x="72" y="132" text-anchor="middle" font-family="Arial" font-size="9" fill="${health.fg}">${t.attention ? `${t.attention} need attention` : `max burn ${Math.round(maxBurn)}%`}</text>
+  </svg>`;
+}
+
+function buildProviderSvg(p) {
+  if (!p) return buildWaitingSvg("NO DATA");
+  const c = tone(p);
+  const burn = p.burnPct === null ? null : Math.max(0, p.burnPct);
+  const shown = burn === null ? Math.round((p.usable / Math.max(1, p.connected)) * 100) : Math.round(burn);
+  const label = PROVIDER_LABELS[p.kind] || String(p.kind || "AI").toUpperCase().slice(0, 7);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">
+    <rect width="144" height="144" rx="12" fill="${c.bg}"/>
+    <circle cx="72" cy="66" r="48" fill="none" stroke="#26303a" stroke-width="8"/>
+    <path d="${arc(72, 66, 48, Math.min(shown, 100))}" fill="none" stroke="${c.ring}" stroke-width="8" stroke-linecap="round"/>
+    <text x="72" y="22" text-anchor="middle" font-family="Arial" font-size="11" font-weight="700" fill="${c.fg}">${label}</text>
+    <text x="72" y="62" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="${c.ring}">${burn === null ? `${p.usable}/${p.connected}` : `${Math.round(burn)}%`}</text>
+    <text x="72" y="79" text-anchor="middle" font-family="Arial" font-size="9" fill="${c.fg}">${burn === null ? "usable" : "burn rate"}</text>
+    <text x="72" y="103" text-anchor="middle" font-family="Arial" font-size="10" font-weight="700" fill="${c.fg}">${p.usable}/${p.connected} ready · ${p.inflight} live</text>
+    <text x="72" y="120" text-anchor="middle" font-family="Arial" font-size="9" fill="${c.fg}">${compact(p.requests)} req · ${compact(p.input + p.output)} tok</text>
+    <text x="72" y="136" text-anchor="middle" font-family="Arial" font-size="9" font-weight="700" fill="${c.ring}">${c.state}${p.attention ? ` · ${p.attention} FIX` : ""}</text>
+  </svg>`;
+}
+
+function buildLegacySvg(snapshot, displayMode) {
+  const p = snapshot?.providers?.claude;
+  if (!p) return buildWaitingSvg("CLAUDE ?");
+  let pct = p.burnPct || 0;
+  let label = "AUTO";
+  if (displayMode === "five_hour") { pct = p.fivePct || 0; label = "5H"; }
+  else if (displayMode === "seven_day") { pct = p.weeklyPct || 0; label = "7D"; }
+  const c = tone({ ...p, burnPct: pct });
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">
+    <rect width="144" height="144" rx="12" fill="${c.bg}"/>
+    <circle cx="72" cy="67" r="50" fill="none" stroke="#26303a" stroke-width="9"/>
+    <path d="${arc(72,67,50,Math.min(pct,100))}" fill="none" stroke="${c.ring}" stroke-width="9" stroke-linecap="round"/>
+    <text x="72" y="25" text-anchor="middle" font-family="Arial" font-size="11" font-weight="700" fill="${c.fg}">CLAUDE ${label}</text>
+    <text x="72" y="70" text-anchor="middle" font-family="Arial" font-size="27" font-weight="800" fill="${c.ring}">${Math.round(pct)}%</text>
+    <text x="72" y="91" text-anchor="middle" font-family="Arial" font-size="10" fill="${c.fg}">used</text>
+    <text x="72" y="119" text-anchor="middle" font-family="Arial" font-size="12" font-weight="700" fill="${c.fg}">${p.reset ? timeUntil(p.reset) : "local"}</text>
+  </svg>`;
+}
+
+function buildWaitingSvg(text = "JARVIS AI") {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144"><rect width="144" height="144" rx="12" fill="#0c1016"/><text x="72" y="64" text-anchor="middle" font-family="Arial" font-size="12" font-weight="700" fill="#9aa4b2">${text}</text><text x="72" y="84" text-anchor="middle" font-family="Arial" font-size="10" fill="#667085">waiting for telemetry</text></svg>`;
+}
+
+function svgData(svg) { return "data:image/svg+xml;base64," + Buffer.from(svg).toString("base64"); }
+
+const runtimes = new Map();
+
+async function settingsFor(action) {
+  try { return await action.getSettings(); }
+  catch { return {}; }
+}
+
+function availableViews(snapshot) {
+  return ["overview", ...PROVIDER_ORDER.filter((p) => snapshot?.providers?.[p])];
+}
+
+async function loadSnapshot(settings) {
+  if (settings.dataSource !== "local") {
+    try { return await readJarvisAi(settings.jarvisAiUrl || DEFAULT_JARVISAI_URL); }
+    catch (err) { streamDeck.logger.warn(`JarvisAI telemetry failed: ${err.message}`); }
   }
+  return legacySnapshot();
+}
 
-  onWillAppear(ev) {
-    updateKey(ev.action);
-    const iv = setInterval(() => updateKey(ev.action), UPDATE_MS);
-    intervals.set(ev.action.id, iv);
+async function updateKey(action, runtime = {}) {
+  const settings = await settingsFor(action);
+  const snapshot = await loadSnapshot(settings);
+  runtime.snapshot = snapshot;
+  if (!snapshot) { action.setImage(svgData(buildWaitingSvg())); return; }
+
+  let view = settings.viewMode || "overview";
+  if (view === "cycle") {
+    const views = availableViews(snapshot);
+    runtime.viewIndex = Math.max(0, Math.min(runtime.viewIndex || 0, views.length - 1));
+    view = views[runtime.viewIndex];
   }
-
-  onWillDisappear(ev) {
-    const iv = intervals.get(ev.action.id);
-    if (iv) clearInterval(iv);
-    intervals.delete(ev.action.id);
-  }
-
-  onKeyDown(ev) {
-    updateKey(ev.action);
-  }
-
-  onDidReceiveSettings(ev) {
-    updateKey(ev.action);
+  if (view === "legacy") {
+    action.setImage(svgData(buildLegacySvg(legacySnapshot(), settings.displayMode || "auto")));
+  } else if (view === "overview") {
+    action.setImage(svgData(buildOverviewSvg(snapshot)));
+  } else {
+    action.setImage(svgData(buildProviderSvg(snapshot.providers[view])));
   }
 }
 
-streamDeck.actions.registerAction(new ClaudeUsageAction());
+async function startRuntime(action) {
+  const id = action.id;
+  const old = runtimes.get(id);
+  if (old?.timer) clearInterval(old.timer);
+  const runtime = old || { viewIndex: 0, timer: null, snapshot: null };
+  const settings = await settingsFor(action);
+  const seconds = Math.max(10, Math.min(300, num(settings.refreshSeconds, DEFAULT_REFRESH_SECONDS)));
+  await updateKey(action, runtime);
+  runtime.timer = setInterval(() => updateKey(action, runtime), seconds * 1000);
+  runtimes.set(id, runtime);
+}
+
+class JarvisAiUsageAction extends SingletonAction {
+  constructor() { super(); this.manifestId = "com.jkkec.claude-usage.usage"; }
+  onWillAppear(ev) { startRuntime(ev.action); }
+  onWillDisappear(ev) { const rt = runtimes.get(ev.action.id); if (rt?.timer) clearInterval(rt.timer); runtimes.delete(ev.action.id); }
+  async onKeyDown(ev) {
+    const rt = runtimes.get(ev.action.id) || { viewIndex: 0 };
+    const settings = await settingsFor(ev.action);
+    if ((settings.viewMode || "overview") === "cycle" && rt.snapshot) {
+      const views = availableViews(rt.snapshot);
+      rt.viewIndex = (rt.viewIndex + 1) % Math.max(1, views.length);
+    }
+    runtimes.set(ev.action.id, rt);
+    await updateKey(ev.action, rt);
+  }
+  onDidReceiveSettings(ev) { startRuntime(ev.action); }
+}
+
+streamDeck.actions.registerAction(new JarvisAiUsageAction());
 streamDeck.connect();
