@@ -583,7 +583,7 @@ function renderCalendarAction(runtime) {
     runtime.action.setImage(svgData(buildWaitingSvg("CAL OFFLINE")));
     return;
   }
-  if (Date.now() - calendarFetchedAt > 120000) {
+  if (Date.now() - calendarFetchedAt > 600000) {
     runtime.action.setImage(svgData(buildWaitingSvg("CAL STALE")));
     return;
   }
