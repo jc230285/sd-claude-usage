@@ -2,7 +2,7 @@ const { streamDeck, SingletonAction } = require("@elgato/streamdeck");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-const { execFileSync } = require("child_process");
+const { execFileSync, spawn } = require("child_process");
 
 const RATE_LIMITS_PATH = path.join(os.homedir(), ".claude", "rate_limits.json");
 const DEFAULT_JARVISAI_URL = "http://100.96.106.91:8792";
@@ -471,8 +471,13 @@ function ceilMinutes(ms) {
 
 function calendarSlots(snapshot) {
   const now = Date.now();
+  const horizon = now + 12 * 60 * 60 * 1000;
   const events = (snapshot?.events || [])
-    .filter((e) => !e.allDay && e.start && e.end && Date.parse(e.end) > now)
+    .filter((e) => {
+      if (e.allDay || !e.start || !e.end) return false;
+      const end = Date.parse(e.end);
+      return end > now && end <= horizon;
+    })
     .sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
   const mine = events.filter((e) => e.mine).slice(0, 2);
   const team = events.filter((e) => !e.mine).slice(0, 2);
@@ -502,7 +507,11 @@ function buildCalendarSvg(slot, runtime) {
   const active = start <= now && now < end;
   const mins = active ? ceilMinutes(end - now) : ceilMinutes(start - now);
   const owner = calendarOwner(event);
-  const top = `${owner} ${active ? "ENDS" : "IN"}`;
+  const under100 = mins < 100;
+  const targetTime = new Date(active ? end : start);
+  const clock = targetTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
+  const top = `${owner} ${active ? "ENDS" : (under100 ? "IN" : "START")}`;
+  const middle = under100 ? `${mins}m` : clock;
   const summary = scrollSummary(event.summary || "UNTITLED", runtime.scrollOffset || 0, 10);
   const bg = active ? "#171208" : "#0b1620";
   const fg = active ? "#ffe7a3" : "#d7efff";
@@ -510,9 +519,57 @@ function buildCalendarSvg(slot, runtime) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">
     <rect width="144" height="144" rx="12" fill="${bg}"/>
     <text x="72" y="29" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="${fg}">${escXml(top)}</text>
-    <text x="72" y="88" text-anchor="middle" font-family="Arial" font-size="52" font-weight="900" fill="${accent}">${mins}m</text>
+    <text x="72" y="88" text-anchor="middle" font-family="Arial" font-size="52" font-weight="900" fill="${accent}">${middle}</text>
     <text x="72" y="128" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="${fg}">${escXml(summary)}</text>
   </svg>`;
+}
+
+function calendarViewIndex(runtime, slots) {
+  const fixed = { my_next: 0, my_following: 1, team_next: 2, team_following: 3 };
+  const mode = runtime.settings?.calendarView || runtime.assignedView || "my_next";
+  if (Object.prototype.hasOwnProperty.call(fixed, mode)) return fixed[mode];
+  return Math.max(0, Math.min(runtime.pageIndex || 0, slots.length - 1));
+}
+
+function currentCalendarSlot(runtime) {
+  const slots = calendarSlots(calendarSnapshot);
+  return slots[calendarViewIndex(runtime, slots)] || null;
+}
+
+function meetingUrl(event) {
+  if (!event) return null;
+  const direct = [event.hangoutLink, event.hangout_link, event.meetingUrl, event.meeting_url, event.conferenceUrl, event.conference_url]
+    .find((v) => typeof v === "string" && /^https?:\/\//i.test(v));
+  if (direct) return direct;
+  const points = event.conferenceData?.entryPoints || event.conference_data?.entry_points || [];
+  const point = points.find((p) => typeof p?.uri === "string" && /^https?:\/\//i.test(p.uri));
+  if (point) return point.uri;
+  const raw = [event.description, event.location].filter(Boolean).join(" ");
+  const found = raw.match(/https?:\/\/[^\s<>\"]+/i);
+  return found ? found[0] : null;
+}
+
+function openMeetingInBrave(url) {
+  if (!url) return false;
+  const candidates = [
+    path.join(process.env.PROGRAMFILES || "C:\\Program Files", "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+    path.join(process.env["PROGRAMFILES(X86)"] || "C:\\Program Files (x86)", "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+    path.join(process.env.LOCALAPPDATA || "", "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+  ];
+  const exe = candidates.find((candidate) => candidate && fs.existsSync(candidate));
+  if (!exe) return false;
+  const child = spawn(exe, ["--new-tab", url], { detached: true, stdio: "ignore", windowsHide: true });
+  child.unref();
+  return true;
+}
+
+function nextFreeCalendarView(actionId) {
+  const order = ["my_next", "my_following", "team_next", "team_following"];
+  const used = new Set([...calendarRuntimes.entries()]
+    .filter(([id]) => id !== actionId)
+    .map(([, r]) => r.settings?.calendarView || r.assignedView)
+    .filter(Boolean));
+  return order.find((v) => !used.has(v)) || order[[...calendarRuntimes.keys()].indexOf(actionId) % order.length] || "my_next";
 }
 
 function renderCalendarAction(runtime) {
@@ -529,8 +586,8 @@ function renderCalendarAction(runtime) {
     return;
   }
   const slots = calendarSlots(calendarSnapshot);
-  runtime.pageIndex = Math.max(0, Math.min(runtime.pageIndex || 0, slots.length - 1));
-  runtime.action.setImage(svgData(buildCalendarSvg(slots[runtime.pageIndex], runtime)));
+  const index = calendarViewIndex(runtime, slots);
+  runtime.action.setImage(svgData(buildCalendarSvg(slots[index], runtime)));
 }
 
 function renderAllCalendar() {
@@ -538,22 +595,23 @@ function renderAllCalendar() {
 }
 
 async function fetchCalendarSnapshot() {
-  let lastErr = null;
-  for (const base of CALENDAR_BASES) {
+  const results = await Promise.all(CALENDAR_BASES.map(async (base) => {
     try {
       const data = await fetchJson(base + "/api/calendar", "", 3500);
       if (!Array.isArray(data?.events)) throw new Error("calendar payload missing events");
-      return { ...data, source: base };
-    } catch (err) {
-      lastErr = err;
-    }
-  }
-  throw lastErr || new Error("calendar unavailable");
+      const owners = new Set(data.events.map((e) => e.calendarUser).filter(Boolean)).size;
+      const team = data.events.filter((e) => e.mine === false).length;
+      return { ok: true, data: { ...data, source: base }, score: owners * 10000 + team * 100 + data.events.length };
+    } catch (error) { return { ok: false, error }; }
+  }));
+  const valid = results.filter((r) => r.ok).sort((a, b) => b.score - a.score);
+  if (valid.length) return valid[0].data;
+  throw results.find((r) => r.error)?.error || new Error("calendar unavailable");
 }
 
 async function pollCalendar(force = false) {
   if (calendarFetchPromise) return calendarFetchPromise;
-  if (!force && calendarSnapshot && Date.now() - calendarFetchedAt < 30000) return calendarSnapshot;
+  if (!force && calendarSnapshot && Date.now() - calendarFetchedAt < 300000) return calendarSnapshot;
   calendarFetchPromise = (async () => {
     try {
       calendarSnapshot = await fetchCalendarSnapshot();
@@ -576,7 +634,6 @@ function armCalendarTimer() {
     for (const runtime of calendarRuntimes.values()) {
       runtime.tick = (runtime.tick || 0) + 1;
       runtime.scrollOffset = (runtime.scrollOffset || 0) + 1;
-      if (runtime.tick % 5 === 0) runtime.pageIndex = ((runtime.pageIndex || 0) + 1) % 4;
       renderCalendarAction(runtime);
     }
     pollCalendar(false);
@@ -587,9 +644,16 @@ class CalendarAgendaAction extends SingletonAction {
   constructor() { super(); this.manifestId = "com.jkkec.claude-usage.calendar"; }
 
   async onWillAppear(ev) {
-    const runtime = calendarRuntimes.get(ev.action.id) || { action: ev.action, pageIndex: 0, scrollOffset: 0, tick: 0 };
+    const runtime = calendarRuntimes.get(ev.action.id) || { action: ev.action, settings: {}, pageIndex: 0, scrollOffset: 0, tick: 0 };
     runtime.action = ev.action;
+    runtime.settings = ev.payload?.settings || await settingsFor(ev.action);
     calendarRuntimes.set(ev.action.id, runtime);
+    if (!runtime.settings.calendarView || runtime.settings.calendarView === "auto") {
+      const assigned = nextFreeCalendarView(ev.action.id);
+      runtime.assignedView = assigned;
+      runtime.settings = { ...runtime.settings, calendarView: assigned };
+      await runtime.action.setSettings(runtime.settings);
+    }
     renderCalendarAction(runtime);
     armCalendarTimer();
     await pollCalendar(false);
@@ -603,11 +667,29 @@ class CalendarAgendaAction extends SingletonAction {
   async onKeyDown(ev) {
     const runtime = calendarRuntimes.get(ev.action.id);
     if (!runtime) return;
-    runtime.pageIndex = ((runtime.pageIndex || 0) + 1) % 4;
+    await pollCalendar(true);
+    const slot = currentCalendarSlot(runtime);
+    const url = meetingUrl(slot?.event);
+    if (url) {
+      if (!openMeetingInBrave(url)) await streamDeck.system.openUrl(url);
+    } else {
+      streamDeck.logger.warn(`No meeting link for calendar event: ${slot?.event?.summary || "none"}`);
+    }
     runtime.scrollOffset = 0;
     runtime.tick = 0;
     renderCalendarAction(runtime);
-    await pollCalendar(true);
+  }
+
+  async onDidReceiveSettings(ev) {
+    const runtime = calendarRuntimes.get(ev.action.id) || { action: ev.action, settings: {}, pageIndex: 0, scrollOffset: 0, tick: 0 };
+    runtime.action = ev.action;
+    runtime.settings = ev.payload?.settings || await settingsFor(ev.action);
+    runtime.assignedView = runtime.settings.calendarView || runtime.assignedView;
+    runtime.scrollOffset = 0;
+    runtime.tick = 0;
+    calendarRuntimes.set(ev.action.id, runtime);
+    renderCalendarAction(runtime);
+    armCalendarTimer();
   }
 }
 
