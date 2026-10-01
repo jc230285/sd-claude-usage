@@ -5,7 +5,7 @@ const os = require("os");
 const { execFileSync } = require("child_process");
 
 const RATE_LIMITS_PATH = path.join(os.homedir(), ".claude", "rate_limits.json");
-const DEFAULT_JARVISAI_URL = "https://ai.viresinnumeris.co.uk";
+const DEFAULT_JARVISAI_URL = "http://100.96.106.91:8792";
 const TOKEN_VAULT_KEY = "JARVIS_AGENT_PROXY_KEY";
 const DEFAULT_REFRESH_SECONDS = 30;
 const PROVIDER_ORDER = ["claude", "codex", "gemini", "groq", "openrouter", "ollama"];
@@ -44,9 +44,11 @@ function readJarvisToken(settings = {}) {
   if (settings.token) return String(settings.token).trim();
   if (process.env.JARVISAI_TOKEN) return String(process.env.JARVISAI_TOKEN).trim();
   try {
-    return execFileSync("wsl.exe", ["-d", "Ubuntu-24.04", "-u", "root", "--", "bao-get", TOKEN_VAULT_KEY], {
+    const raw = execFileSync("wsl.exe", ["-d", "Ubuntu-24.04", "-u", "root", "--", "bao-get", TOKEN_VAULT_KEY], {
       encoding: "utf8", timeout: 5000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"]
-    }).trim();
+    });
+    const lines = raw.split(/\r?\n/).map((line) => line.replace(/\x1b\[[0-9;]*m/g, "").trim()).filter(Boolean);
+    return (lines.at(-1) || "").replace(/[^\x21-\x7e]/g, "");
   } catch { return ""; }
 }
 
@@ -145,8 +147,16 @@ function normalizeJarvisV1(health = {}, usage = {}) {
 
 async function readJarvisAi(baseUrl, settings = {}) {
   const base = String(baseUrl || DEFAULT_JARVISAI_URL).replace(/\/+$/, "");
+  // Preferred path: Tailscale-only Home1 bridge. It exposes only sanitised
+  // telemetry, so no JarvisAI credential ever needs to live in Stream Deck.
+  try {
+    const bridge = await fetchJson(base + "/stats");
+    if (bridge && bridge.providers && bridge.totals) return bridge;
+  } catch {}
+
+  // Direct JarvisAI v1 fallback for machines that have the BAO credential.
   const token = readJarvisToken(settings);
-  if (!token) throw new Error("JarvisAI machine credential unavailable");
+  if (!token) throw new Error("JarvisAI bridge unavailable and machine credential unavailable");
   const [health, usage] = await Promise.all([
     fetchJson(base + "/v1/health", token),
     fetchJson(base + "/v1/usage", token),
