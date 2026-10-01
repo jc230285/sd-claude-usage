@@ -2,9 +2,11 @@ const { streamDeck, SingletonAction } = require("@elgato/streamdeck");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const { execFileSync } = require("child_process");
 
 const RATE_LIMITS_PATH = path.join(os.homedir(), ".claude", "rate_limits.json");
-const DEFAULT_JARVISAI_URL = "http://127.0.0.1:8791";
+const DEFAULT_JARVISAI_URL = "https://ai.viresinnumeris.co.uk";
+const TOKEN_VAULT_KEY = "JARVIS_AGENT_PROXY_KEY";
 const DEFAULT_REFRESH_SECONDS = 30;
 const PROVIDER_ORDER = ["claude", "codex", "gemini", "groq", "openrouter", "ollama"];
 const PROVIDER_LABELS = {
@@ -26,14 +28,26 @@ function readRateLimits() {
   catch { return null; }
 }
 
-async function fetchJson(url, timeoutMs = 2500) {
+async function fetchJson(url, token = "", timeoutMs = 3500) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { headers: { accept: "application/json" }, cache: "no-store", signal: ctrl.signal });
+    const headers = { accept: "application/json" };
+    if (token) headers.authorization = `Bearer ${token}`;
+    const res = await fetch(url, { headers, cache: "no-store", signal: ctrl.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
   } finally { clearTimeout(timer); }
+}
+
+function readJarvisToken(settings = {}) {
+  if (settings.token) return String(settings.token).trim();
+  if (process.env.JARVISAI_TOKEN) return String(process.env.JARVISAI_TOKEN).trim();
+  try {
+    return execFileSync("wsl.exe", ["-d", "Ubuntu-24.04", "-u", "root", "--", "bao-get", TOKEN_VAULT_KEY], {
+      encoding: "utf8", timeout: 5000, windowsHide: true, stdio: ["ignore", "pipe", "ignore"]
+    }).trim();
+  } catch { return ""; }
 }
 
 function providerKind(row = {}) {
@@ -70,72 +84,74 @@ function rowBurnPct(row = {}) {
   return max;
 }
 
-function normalizeDashboard(data = {}) {
-  const rows = Array.isArray(data.accounts) ? data.accounts : [];
-  const groups = new Map();
+function normalizeJarvisV1(health = {}, usage = {}) {
+  const rows = Array.isArray(health.accounts) ? health.accounts : [];
+  const byAccount = usage.byAccount || {};
+  const grouped = new Map();
   for (const row of rows) {
-    const kind = providerKind(row);
+    const kind = providerKind({ kind: row.providerKind || row.provider || row.kind });
     if (!PROVIDER_ORDER.includes(kind)) continue;
-    if (!groups.has(kind)) groups.set(kind, []);
-    groups.get(kind).push(row);
+    if (!grouped.has(kind)) grouped.set(kind, []);
+    const weekly = (row.burnWindows || []).find((w) => w.name === "weekly:all_models")
+      || (row.burnWindows || []).find((w) => String(w.name || "").startsWith("weekly:")) || null;
+    const u = byAccount[row.id]?.["24h"] || {};
+    grouped.get(kind).push({
+      kind,
+      enabled: Boolean(row.enabled),
+      connected: Boolean(row.connected),
+      inPool: Boolean(row.inPool),
+      available: row.available === undefined ? String(row.status || "").toLowerCase() === "available" : Boolean(row.available),
+      status: String(row.status || ""),
+      reauth: Boolean(row.reauthRequired),
+      limitReached: Boolean(row.usageLimitReached || row.burnRateExceeded),
+      burnPct: weekly?.burnRatePercent == null ? null : num(weekly.burnRatePercent, null),
+      usedPct: weekly?.usagePercent == null ? null : num(weekly.usagePercent, null),
+      inflight: num(row.quota?.usage?.inFlight),
+      requests: num(u.requests),
+      input: num(u.usage?.inputTokens),
+      output: num(u.usage?.outputTokens),
+      cost: num(u.costUsd),
+    });
   }
 
   const providers = {};
   for (const kind of PROVIDER_ORDER) {
-    const list = groups.get(kind) || [];
+    const list = grouped.get(kind) || [];
     if (!list.length) continue;
-    const connected = list.filter((r) => r.connected !== false && r.enabled !== false).length;
-    const usable = list.filter((r) => {
-      const burn = rowBurnPct(r);
-      return r.connected !== false && r.enabled !== false && !r.cooldown?.cooling && !r.cooling && !r.human_attention && (burn === null || burn < 100);
-    }).length;
-    const burns = list.map(rowBurnPct).filter((v) => v !== null && Number.isFinite(v));
-    const requests = list.reduce((n, r) => n + num(r.observed_requests ?? r.burn?.requests ?? r.requests), 0);
-    const input = list.reduce((n, r) => n + num(r.input_tokens ?? r.burn?.input_tokens ?? r.usage?.inputTokens), 0);
-    const output = list.reduce((n, r) => n + num(r.output_tokens ?? r.burn?.output_tokens ?? r.usage?.outputTokens), 0);
-    const inflight = list.reduce((n, r) => n + num(r.in_flight ?? r.inFlight), 0);
-    const cost = list.reduce((n, r) => n + num(r.cost_usd ?? r.burn?.cost_usd ?? r.costUsd), 0);
-    const capacity = list.reduce((n, r) => n + num(r.capacity_multiplier ?? r.multiplier, 1), 0);
-    const attention = list.filter((r) => r.human_attention || r.status?.needs_relogin || r.status?.needs_reauth || r.status?.key_missing_reason).length;
+    const connectedRows = list.filter((r) => r.enabled && r.connected && r.inPool);
+    const operational = connectedRows.filter((r) => r.available && !r.reauth && !r.limitReached && !["held","unhealthy","offline","disabled","quota_exhausted","usage_limit_reached","reauth_required"].includes(r.status.toLowerCase()));
+    const burns = connectedRows.map((r) => r.burnPct).filter((v) => v !== null && Number.isFinite(v));
     providers[kind] = {
-      kind, accounts: list.length, connected, usable, capacity, requests, input, output, inflight, cost, attention,
-      burnPct: burns.length ? burns.reduce((a, b) => a + b, 0) / burns.length : null,
+      kind, accounts: list.length, connected: connectedRows.length,
+      usable: operational.filter((r) => r.burnPct === null || r.burnPct < 100).length,
+      operational: operational.length,
+      requests: list.reduce((n,r)=>n+r.requests,0), input: list.reduce((n,r)=>n+r.input,0), output: list.reduce((n,r)=>n+r.output,0),
+      inflight: list.reduce((n,r)=>n+r.inflight,0), cost: list.reduce((n,r)=>n+r.cost,0),
+      attention: connectedRows.filter((r) => r.reauth || !r.available).length,
+      burnPct: burns.length ? burns.reduce((a,b)=>a+b,0)/burns.length : null,
       lowestBurnPct: burns.length ? Math.min(...burns) : null,
     };
   }
-
-  const totals = data.totals || {};
-  const providerValues = Object.values(providers);
+  const vals = Object.values(providers);
   return {
-    source: "jarvisai",
-    generatedAt: data.generated_at || data.generatedAt || new Date().toISOString(),
-    providers,
+    source: "jarvisai-v1", generatedAt: new Date().toISOString(), providers,
     totals: {
-      accounts: providerValues.reduce((n, p) => n + p.accounts, 0),
-      connected: providerValues.reduce((n, p) => n + p.connected, 0),
-      usable: providerValues.reduce((n, p) => n + p.usable, 0),
-      requests: num(totals.requests, providerValues.reduce((n, p) => n + p.requests, 0)),
-      input: num(totals.input_tokens ?? totals.inputTokens, providerValues.reduce((n, p) => n + p.input, 0)),
-      output: num(totals.output_tokens ?? totals.outputTokens, providerValues.reduce((n, p) => n + p.output, 0)),
-      inflight: num(totals.in_flight ?? totals.inFlight, providerValues.reduce((n, p) => n + p.inflight, 0)),
-      cost: num(totals.cost_usd ?? totals.costUsd, providerValues.reduce((n, p) => n + p.cost, 0)),
-      attention: providerValues.reduce((n, p) => n + p.attention, 0),
-    },
+      accounts: vals.reduce((n,p)=>n+p.accounts,0), connected: vals.reduce((n,p)=>n+p.connected,0), usable: vals.reduce((n,p)=>n+p.usable,0),
+      requests: vals.reduce((n,p)=>n+p.requests,0), input: vals.reduce((n,p)=>n+p.input,0), output: vals.reduce((n,p)=>n+p.output,0),
+      inflight: vals.reduce((n,p)=>n+p.inflight,0), cost: vals.reduce((n,p)=>n+p.cost,0), attention: vals.reduce((n,p)=>n+p.attention,0),
+    }
   };
 }
 
-async function readJarvisAi(baseUrl) {
+async function readJarvisAi(baseUrl, settings = {}) {
   const base = String(baseUrl || DEFAULT_JARVISAI_URL).replace(/\/+$/, "");
-  const paths = ["/dashboard/data", "/api/dashboard/data"];
-  let lastError = null;
-  for (const p of paths) {
-    try {
-      const data = await fetchJson(base + p);
-      const normalized = normalizeDashboard(data);
-      if (normalized.totals.accounts || Object.keys(normalized.providers).length) return normalized;
-    } catch (err) { lastError = err; }
-  }
-  throw lastError || new Error("JarvisAI telemetry unavailable");
+  const token = readJarvisToken(settings);
+  if (!token) throw new Error("JarvisAI machine credential unavailable");
+  const [health, usage] = await Promise.all([
+    fetchJson(base + "/v1/health", token),
+    fetchJson(base + "/v1/usage", token),
+  ]);
+  return normalizeJarvisV1(health, usage);
 }
 
 function timeUntil(epochSec) {
@@ -270,7 +286,7 @@ function availableViews(snapshot) {
 
 async function loadSnapshot(settings) {
   if (settings.dataSource !== "local") {
-    try { return await readJarvisAi(settings.jarvisAiUrl || DEFAULT_JARVISAI_URL); }
+    try { return await readJarvisAi(settings.jarvisAiUrl || DEFAULT_JARVISAI_URL, settings); }
     catch (err) { streamDeck.logger.warn(`JarvisAI telemetry failed: ${err.message}`); }
   }
   return legacySnapshot();
