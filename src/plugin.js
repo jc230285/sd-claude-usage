@@ -235,30 +235,29 @@ function buildOverviewSvg(snapshot) {
   const burn = claude?.burnPct;
   const health = tone(claude || { connected: t.connected, attention: t.attention, burnPct: 0 });
   const loginCount = Array.isArray(snapshot.loginActions) ? snapshot.loginActions.length : 0;
-  const value = burn === null || burn === undefined ? "—" : `${Math.round(burn)}%`;
-  const footer = loginCount ? `${loginCount} LOGIN${loginCount === 1 ? "" : "S"}` : `JARVIS ${t.usable}/${t.accounts} READY`;
+  const value = burn === null || burn === undefined ? null : Math.round(burn);
+  const footer = loginCount ? `${loginCount} LOGIN${loginCount === 1 ? "" : "S"}` : `${t.usable}/${t.accounts} READY`;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">
     <rect width="144" height="144" rx="12" fill="${health.bg}"/>
-    <text x="72" y="24" text-anchor="middle" font-family="Arial" font-size="14" font-weight="800" fill="${health.fg}">CLAUDE 7D AVG</text>
-    <text x="72" y="88" text-anchor="middle" font-family="Arial" font-size="54" font-weight="900" fill="${health.ring}">${value}</text>
-    <text x="72" y="124" text-anchor="middle" font-family="Arial" font-size="14" font-weight="800" fill="${health.fg}">${footer}</text>
+    <text x="72" y="28" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="${health.fg}">CLAUDE 7D</text>
+    <text x="72" y="94" text-anchor="middle" font-family="Arial" font-weight="900" fill="${health.ring}">${value === null ? '<tspan font-size="64">—</tspan>' : `<tspan font-size="64">${value}</tspan><tspan font-size="24" dy="-24">%</tspan>`}</text>
+    <text x="72" y="132" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="${health.fg}">${footer}</text>
   </svg>`;
 }
+
 function buildProviderSvg(p) {
   if (!p) return buildWaitingSvg("NO DATA");
   const c = tone(p);
   const burn = p.burnPct === null ? null : Math.max(0, p.burnPct);
   const label = PROVIDER_LABELS[p.kind] || String(p.kind || "AI").toUpperCase().slice(0, 7);
-  const top = p.kind === "claude" ? "CLAUDE 7D AVG" : label;
-  const value = burn === null ? `${p.usable}/${p.connected}` : `${Math.round(burn)}%`;
+  const top = p.kind === "claude" ? "CLAUDE 7D" : label;
+  const value = burn === null ? null : Math.round(burn);
   const bottom = p.attention ? `${p.attention} LOGIN${p.attention === 1 ? "" : "S"}` : `${p.usable}/${p.connected} READY`;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">
     <rect width="144" height="144" rx="12" fill="${c.bg}"/>
-    <circle cx="72" cy="70" r="51" fill="none" stroke="#26303a" stroke-width="8"/>
-    <path d="${arc(72,70,51,Math.min(burn ?? (p.usable/Math.max(1,p.connected))*100,100))}" fill="none" stroke="${c.ring}" stroke-width="8" stroke-linecap="round"/>
-    <text x="72" y="24" text-anchor="middle" font-family="Arial" font-size="14" font-weight="800" fill="${c.fg}">${top}</text>
-    <text x="72" y="88" text-anchor="middle" font-family="Arial" font-size="50" font-weight="900" fill="${c.ring}">${value}</text>
-    <text x="72" y="126" text-anchor="middle" font-family="Arial" font-size="14" font-weight="800" fill="${c.fg}">${bottom}</text>
+    <text x="72" y="28" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="${c.fg}">${top}</text>
+    <text x="72" y="94" text-anchor="middle" font-family="Arial" font-weight="900" fill="${c.ring}">${burn === null ? `<tspan font-size="52">${p.usable}/${p.connected}</tspan>` : `<tspan font-size="60">${value}</tspan><tspan font-size="24" dy="-22">%</tspan>`}</text>
+    <text x="72" y="132" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="${c.fg}">${bottom}</text>
   </svg>`;
 }
 
@@ -268,9 +267,9 @@ function buildLoginSvg(snapshot) {
   const c = count ? {bg:'#321014',fg:'#ffd0d4',ring:'#ff4757'} : {bg:'#071d16',fg:'#b9ffe3',ring:'#2ed573'};
   return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">
     <rect width="144" height="144" rx="12" fill="${c.bg}"/>
-    <text x="72" y="26" text-anchor="middle" font-family="Arial" font-size="14" font-weight="800" fill="${c.fg}">ACCOUNT LOGINS</text>
-    <text x="72" y="91" text-anchor="middle" font-family="Arial" font-size="58" font-weight="900" fill="${c.ring}">${count}</text>
-    <text x="72" y="126" text-anchor="middle" font-family="Arial" font-size="14" font-weight="800" fill="${c.fg}">${count ? 'PRESS TO LOGIN' : 'ALL SIGNED IN'}</text>
+    <text x="72" y="28" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="${c.fg}">LOGINS</text>
+    <text x="72" y="94" text-anchor="middle" font-family="Arial" font-size="68" font-weight="900" fill="${c.ring}">${count}</text>
+    <text x="72" y="132" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="${c.fg}">${count ? 'PRESS' : 'OK'}</text>
   </svg>`;
 }
 
@@ -284,17 +283,15 @@ function buildLegacySvg(snapshot, displayMode) {
   const c = tone({ ...p, burnPct: pct });
   return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">
     <rect width="144" height="144" rx="12" fill="${c.bg}"/>
-    <circle cx="72" cy="67" r="50" fill="none" stroke="#26303a" stroke-width="9"/>
-    <path d="${arc(72,67,50,Math.min(pct,100))}" fill="none" stroke="${c.ring}" stroke-width="9" stroke-linecap="round"/>
-    <text x="72" y="25" text-anchor="middle" font-family="Arial" font-size="11" font-weight="700" fill="${c.fg}">CLAUDE ${label}</text>
-    <text x="72" y="70" text-anchor="middle" font-family="Arial" font-size="27" font-weight="800" fill="${c.ring}">${Math.round(pct)}%</text>
-    <text x="72" y="91" text-anchor="middle" font-family="Arial" font-size="10" fill="${c.fg}">used</text>
-    <text x="72" y="119" text-anchor="middle" font-family="Arial" font-size="12" font-weight="700" fill="${c.fg}">${p.reset ? timeUntil(p.reset) : "local"}</text>
+    <text x="72" y="28" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="${c.fg}">CLAUDE ${label}</text>
+    <text x="72" y="94" text-anchor="middle" font-family="Arial" font-weight="900" fill="${c.ring}"><tspan font-size="60">${Math.round(pct)}</tspan><tspan font-size="24" dy="-22">%</tspan></text>
+    <text x="72" y="132" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="${c.fg}">${p.reset ? timeUntil(p.reset) : 'LOCAL'}</text>
   </svg>`;
 }
 
-function buildWaitingSvg(text = "JARVIS AI") {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144"><rect width="144" height="144" rx="12" fill="#0c1016"/><text x="72" y="64" text-anchor="middle" font-family="Arial" font-size="12" font-weight="700" fill="#9aa4b2">${text}</text><text x="72" y="84" text-anchor="middle" font-family="Arial" font-size="10" fill="#667085">waiting for telemetry</text></svg>`;
+function buildWaitingSvg(text = "JARVIS") {
+  const short = String(text || 'JARVIS').toUpperCase().slice(0, 12);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144"><rect width="144" height="144" rx="12" fill="#0c1016"/><text x="72" y="74" text-anchor="middle" font-family="Arial" font-size="28" font-weight="800" fill="#9aa4b2">${short}</text><text x="72" y="116" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="#667085">WAIT</text></svg>`;
 }
 
 function svgData(svg) { return "data:image/svg+xml;base64," + Buffer.from(svg).toString("base64"); }
