@@ -248,16 +248,17 @@ function buildOverviewSvg(snapshot) {
 function buildProviderSvg(p) {
   if (!p) return buildWaitingSvg("NO DATA");
   const c = tone(p);
-  const burn = p.burnPct === null ? null : Math.max(0, p.burnPct);
+  const hasBurn = p.burnPct !== null && p.burnPct !== undefined && Number.isFinite(Number(p.burnPct));
+  const burn = hasBurn ? Math.max(0, Number(p.burnPct)) : null;
   const label = PROVIDER_LABELS[p.kind] || String(p.kind || "AI").toUpperCase().slice(0, 7);
-  const top = p.kind === "claude" ? "CLAUDE 7D" : label;
   const value = burn === null ? null : Math.round(burn);
-  const bottom = p.attention ? `${p.attention} LOGIN${p.attention === 1 ? "" : "S"}` : `${p.usable}/${p.connected} READY`;
+  const total = Number.isFinite(Number(p.accounts)) ? Number(p.accounts) : Number(p.connected || 0);
+  const usable = Number(p.usable || 0);
   return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">
     <rect width="144" height="144" rx="12" fill="${c.bg}"/>
-    <text x="72" y="28" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="${c.fg}">${top}</text>
-    <text x="72" y="94" text-anchor="middle" font-family="Arial" font-weight="900" fill="${c.ring}">${burn === null ? `<tspan font-size="52">${p.usable}/${p.connected}</tspan>` : `<tspan font-size="60">${value}</tspan><tspan font-size="24" dy="-22">%</tspan>`}</text>
-    <text x="72" y="132" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="${c.fg}">${bottom}</text>
+    <text x="72" y="28" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="${c.fg}">${label}</text>
+    ${value === null ? '' : `<text x="72" y="94" text-anchor="middle" font-family="Arial" font-weight="900" fill="${c.ring}"><tspan font-size="60">${value}</tspan><tspan font-size="24" dy="-22">%</tspan></text>`}
+    <text x="72" y="132" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="${c.fg}">${usable}/${total}</text>
   </svg>`;
 }
 
@@ -469,14 +470,15 @@ function ceilMinutes(ms) {
   return Math.max(0, Math.ceil(ms / 60000));
 }
 
-function calendarSlots(snapshot) {
+function calendarSlots(snapshot, runtime = null) {
   const now = Date.now();
   const horizon = now + 12 * 60 * 60 * 1000;
+  const disableHorizon = runtime?.settings?.disable12hFilter === true || runtime?.settings?.disable12hFilter === "true";
   const events = (snapshot?.events || [])
     .filter((e) => {
       if (e.allDay || !e.start || !e.end) return false;
       const end = Date.parse(e.end);
-      return end > now && end <= horizon;
+      return end > now && (disableHorizon || end <= horizon);
     })
     .sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
   const mine = events.filter((e) => e.mine).slice(0, 2);
@@ -532,7 +534,7 @@ function calendarViewIndex(runtime, slots) {
 }
 
 function currentCalendarSlot(runtime) {
-  const slots = calendarSlots(calendarSnapshot);
+  const slots = calendarSlots(calendarSnapshot, runtime);
   return slots[calendarViewIndex(runtime, slots)] || null;
 }
 
@@ -585,7 +587,7 @@ function renderCalendarAction(runtime) {
     runtime.action.setImage(svgData(buildWaitingSvg("CAL STALE")));
     return;
   }
-  const slots = calendarSlots(calendarSnapshot);
+  const slots = calendarSlots(calendarSnapshot, runtime);
   const index = calendarViewIndex(runtime, slots);
   runtime.action.setImage(svgData(buildCalendarSvg(slots[index], runtime)));
 }
