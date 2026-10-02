@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"/><title>JarvisAI Home</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#2d2d2d;color:#ccc;margin:0;padding:8px}.wrap{padding:4px 16px}.item{display:flex;align-items:center;margin:10px 0;gap:8px}.label{width:92px;font-size:12px;color:#aaa}select{flex:1;min-width:0;background:#3b3b3b;color:#eee;border:1px solid #555;border-radius:3px;padding:6px;font-size:12px}.hint{font-size:11px;color:#aaa;line-height:1.4;margin:8px 0 0 100px}.breakdown{margin:12px 0 0 100px;font-size:11px;color:#bbb}.row{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #444}.bad{color:#ffb4bc}.good{color:#b9ffe3}
+</style></head><body><div class="wrap">
+<div id="healthOptions" style="display:none">
+  <div class="item"><div class="label">Display</div><select id="healthSelection">
+    <option value="problems">Problems only — auto scroll</option>
+    <option value="all">All apps — auto scroll</option>
+    <option value="Plex">Plex</option>
+    <option value="NAS">NAS</option>
+    <option value="Desktop">Desktop</option>
+  </select></div>
+  <div class="hint">Problems-only skips healthy apps and rotates through anything that needs attention. Selecting a named app pins the key to that app.</div>
+</div>
+<div id="nasOptions" style="display:none">
+  <div class="item"><div class="label">Storage</div><div style="flex:1;font-size:12px;color:#ddd">Live NAS breakdown</div></div>
+  <div class="breakdown" id="nasBreakdown">Loading…</div>
+  <div class="hint">Percentages are share of used space. Press the NAS key to open its Paperclip monitor.</div>
+</div>
+</div><script>
+let ws=null,uuid=null,settings={},actionId="";
+function connectElgatoStreamDeckSocket(port,piUuid,registerEvent,info,actionInfo){
+  uuid=piUuid;const ai=JSON.parse(actionInfo);settings=ai.payload.settings||{};actionId=ai.action||"";
+  if(actionId.endsWith(".healthapp")){
+    document.getElementById("healthOptions").style.display="block";
+    const s=document.getElementById("healthSelection");s.value=settings.healthSelection||"problems";s.addEventListener("change",save);
+  }
+  if(actionId.endsWith(".nas")){
+    document.getElementById("nasOptions").style.display="block";loadNas();
+  }
+  ws=new WebSocket("ws://127.0.0.1:"+port);ws.onopen=()=>ws.send(JSON.stringify({event:registerEvent,uuid:piUuid}));
+}
+function save(){settings.healthSelection=document.getElementById("healthSelection").value;if(ws&&ws.readyState===1)ws.send(JSON.stringify({event:"setSettings",context:uuid,payload:settings}));}
+function fmt(n){if(n===null||n===undefined||!isFinite(Number(n)))return "n/a";const x=Number(n);return (x>=1?(Math.round(x*100)/100)+" TB":Math.round(x*1024)+" GB");}
+async function loadNas(){
+  const el=document.getElementById("nasBreakdown");
+  try{
+    const r=await fetch("http://100.96.106.91:8793/nas",{cache:"no-store"});const n=await r.json();
+    const used=Number(n.used_tb)||0;
+    const rows=[["Movies",n.movies_tb],["Shows",n.shows_tb],["Music",n.music_tb],["ROMs",n.roms_tb],["Other",n.other_tb]];
+    el.innerHTML=rows.map(([name,v])=>{const num=Number(v);const pct=Number.isFinite(num)&&used>0?Math.round(num/used*1000)/10:null;const tip=name+" uses "+fmt(v)+(pct===null?"":" ("+pct+"% of used space)");return '<div class="row" title="'+tip+'"><span>'+name+'</span><span>'+fmt(v)+(pct===null?"":" · "+pct+"%")+'</span></div>';}).join("")+
+      '<div class="row" title="Free space on the NAS"><span>Free</span><span>'+fmt(n.free_tb)+' · '+Math.round(Number(n.free_pct)||0)+'%</span></div>';
+  }catch(e){el.textContent="Storage data unavailable";}
+}
+</script></body></html>
