@@ -515,12 +515,12 @@ function buildCalendarSvg(slot, runtime) {
   const targetTime = new Date(active ? end : start);
   const clock = targetTime.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
   const stateText = active ? "ENDS" : (under100 ? "IN" : "START");
-  const ownerColour = staleWarning ? "#ff4757" : fg;
   const middle = under100 ? `${mins}m` : clock;
   const summary = scrollSummary(event.summary || "UNTITLED", runtime.scrollOffset || 0, 10);
   const bg = active ? "#171208" : "#0b1620";
   const fg = active ? "#ffe7a3" : "#d7efff";
   const accent = active ? "#f1c40f" : "#6ec5ff";
+  const ownerColour = staleWarning ? "#ff4757" : fg;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">
     <rect width="144" height="144" rx="12" fill="${bg}"/>
     <text x="72" y="29" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800"><tspan fill="${ownerColour}">${escXml(owner)}</tspan><tspan fill="${fg}"> ${escXml(stateText)}</tspan></text>
