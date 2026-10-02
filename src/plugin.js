@@ -729,7 +729,7 @@ function buildHeatherSvg(h) {
   else if (Number.isFinite(Number(h.distance_home_km))) value = Math.round(Number(h.distance_home_km)) + "km";
   const footer = home ? "HEATHER" : shortLabel(h.location || "AWAY", 10);
   const top = home ? "AT HOME" : toward ? "TO HOME" : away ? "AWAY" : "HEATHER";
-  const size = value.length <= 3 ? 64 : value.length <= 5 ? 54 : 42;
+  const size = home ? 34 : (value.length <= 3 ? 64 : value.length <= 5 ? 54 : 42);
   return '<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">' +
     '<rect width="144" height="144" rx="12" fill="' + bg + '"/>' +
     '<text x="72" y="28" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="' + fg + '">' + escXml(top) + '</text>' +
@@ -771,9 +771,31 @@ function healthTone(state) {
   if (["offline","error","failed","unavailable","down"].includes(s)) return {bg:"#351014",fg:"#ff4757"};
   return {bg:"#10151c",fg:"#9aa4b2"};
 }
-function buildHealthSvg(data, runtime) {
+function healthyState(state) {
+  const s = String(state || "unknown").toLowerCase();
+  return ["online","ok","ready","healthy","on","active","running"].includes(s);
+}
+function healthApps(data, runtime) {
   const apps = Array.isArray(data && data.apps) ? data.apps : [];
-  if (!apps.length) return buildWaitingSvg("HEALTH");
+  const selection = runtime?.settings?.healthSelection || "problems";
+  if (selection === "problems") return apps.filter((a) => !healthyState(a.state));
+  if (selection === "all") return apps;
+  const pinned = apps.filter((a) => String(a.name).toLowerCase() === String(selection).toLowerCase());
+  return pinned.length ? pinned : apps.filter((a) => !healthyState(a.state));
+}
+function currentHealthApp(data, runtime) {
+  const apps = healthApps(data, runtime);
+  if (!apps.length) return null;
+  const idx = Math.max(0, (runtime && runtime.healthIndex || 0) % apps.length);
+  return apps[idx];
+}
+function buildHealthSvg(data, runtime) {
+  const all = Array.isArray(data && data.apps) ? data.apps : [];
+  if (!all.length) return buildWaitingSvg("HEALTH");
+  const apps = healthApps(data, runtime);
+  if (!apps.length) {
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144"><rect width="144" height="144" rx="12" fill="#071d16"/><text x="72" y="33" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="#b9ffe3">HEALTH</text><text x="72" y="88" text-anchor="middle" font-family="Arial" font-size="40" font-weight="900" fill="#2ed573">ALL OK</text><text x="72" y="130" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="#b9ffe3">CLEAR</text></svg>';
+  }
   const idx = Math.max(0, (runtime && runtime.healthIndex || 0) % apps.length);
   const app = apps[idx];
   const c = healthTone(app.state);
@@ -838,11 +860,12 @@ class HeatherEtaAction extends SingletonAction {
   onWillDisappear(ev){homeRuntimes.delete(ev.action.id);armHomeTimer();}
   async onKeyDown(){await pollHomeData(true);}
 }
+const NAS_PAPERCLIP_URL = "https://paperclip.collinscreations.co.uk/issues/MED-105";
 class NasStorageAction extends SingletonAction {
   constructor(){super();this.manifestId="com.jkkec.claude-usage.nas";}
   async onWillAppear(ev){await homeAppear(ev,"nas");}
   onWillDisappear(ev){homeRuntimes.delete(ev.action.id);armHomeTimer();}
-  async onKeyDown(){await pollHomeData(true);}
+  async onKeyDown(){await streamDeck.system.openUrl(NAS_PAPERCLIP_URL); await pollHomeData(true);}
 }
 class HealthAwareAppAction extends SingletonAction {
   constructor(){super();this.manifestId="com.jkkec.claude-usage.healthapp";}
@@ -850,8 +873,21 @@ class HealthAwareAppAction extends SingletonAction {
   onWillDisappear(ev){homeRuntimes.delete(ev.action.id);armHomeTimer();}
   async onKeyDown(ev){
     const r=homeRuntimes.get(ev.action.id);
-    if(r){r.healthIndex=(r.healthIndex||0)+1;renderHomeRuntime(r);}
+    if(r){
+      const app=currentHealthApp(homeSnapshot?.health,r);
+      if(app?.url){await streamDeck.system.openUrl(app.url);}
+      else {r.healthIndex=(r.healthIndex||0)+1;renderHomeRuntime(r);}
+    }
     await pollHomeData(true);
+  }
+  async onDidReceiveSettings(ev){
+    const r=homeRuntimes.get(ev.action.id) || {action:ev.action,kind:"health",healthIndex:0,settings:{}};
+    r.action=ev.action;
+    r.settings=ev.payload?.settings || await settingsFor(ev.action);
+    r.healthIndex=0;
+    homeRuntimes.set(ev.action.id,r);
+    renderHomeRuntime(r);
+    armHomeTimer();
   }
 }
 
