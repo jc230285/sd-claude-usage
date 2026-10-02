@@ -71,7 +71,8 @@
           "Image": "imgs/actions/usage/icon",
           "TitleAlignment": "middle"
         }
-      ]
+      ],
+      "PropertyInspectorPath": "ui/home-inspector.html"
     },
     {
       "Name": "Health-Aware App",
@@ -83,7 +84,8 @@
           "Image": "imgs/actions/usage/icon",
           "TitleAlignment": "middle"
         }
-      ]
+      ],
+      "PropertyInspectorPath": "ui/home-inspector.html"
     }
   ]
 }
