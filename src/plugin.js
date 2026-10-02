@@ -694,6 +694,170 @@ class CalendarAgendaAction extends SingletonAction {
   }
 }
 
+
+const HOME_DATA_BASE = "http://100.96.106.91:8793";
+const homeRuntimes = new Map();
+let homeSnapshot = null;
+let homeFetchedAt = 0;
+let homePollPromise = null;
+let homeTimer = null;
+
+function shortLabel(value, max = 10) {
+  const clean = String(value || "").replace(/\s+/g, " ").trim().toUpperCase();
+  if (clean.length <= max) return clean;
+  return clean.slice(0, Math.max(1, max - 1)) + "…";
+}
+function fmtSpace(tb) {
+  const n = Number(tb);
+  if (!Number.isFinite(n)) return "?";
+  if (n >= 1) return (Math.round(n * 10) / 10).toString().replace(/\.0$/, "") + "TB";
+  return Math.round(n * 1024) + "GB";
+}
+function buildHeatherSvg(h) {
+  if (!h || !h.ok) return buildWaitingSvg("HEATHER");
+  const dir = String(h.direction || "unknown");
+  const home = dir === "home" || h.state === "home";
+  const toward = dir === "toward";
+  const away = dir === "away";
+  const bg = home ? "#071d16" : toward ? "#071d16" : away ? "#351014" : "#10151c";
+  const accent = home || toward ? "#2ed573" : away ? "#ff4757" : "#9aa4b2";
+  const fg = home || toward ? "#caffea" : away ? "#ffd0d4" : "#e5e7eb";
+  const eta = Number(h.eta_min);
+  let value = "—";
+  if (home) value = "HOME";
+  else if (Number.isFinite(eta)) value = Math.max(0, Math.round(eta)) + "m";
+  else if (Number.isFinite(Number(h.distance_home_km))) value = Math.round(Number(h.distance_home_km)) + "km";
+  const footer = home ? "HEATHER" : shortLabel(h.location || "AWAY", 10);
+  const top = home ? "AT HOME" : toward ? "TO HOME" : away ? "AWAY" : "HEATHER";
+  const size = value.length <= 3 ? 64 : value.length <= 5 ? 54 : 42;
+  return '<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">' +
+    '<rect width="144" height="144" rx="12" fill="' + bg + '"/>' +
+    '<text x="72" y="28" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="' + fg + '">' + escXml(top) + '</text>' +
+    '<text x="72" y="91" text-anchor="middle" font-family="Arial" font-size="' + size + '" font-weight="900" fill="' + accent + '" stroke="#000" stroke-width="1.5" paint-order="stroke">' + escXml(value) + '</text>' +
+    '<text x="72" y="130" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="' + fg + '">' + escXml(footer) + '</text></svg>';
+}
+function donutSegments(parts, total) {
+  const r = 38, c = 2 * Math.PI * r;
+  let offset = 0, out = "";
+  for (const p of parts) {
+    const v = Math.max(0, Number(p.value) || 0);
+    if (!v || !total) continue;
+    const len = c * v / total;
+    out += '<circle cx="72" cy="78" r="' + r + '" fill="none" stroke="' + p.color + '" stroke-width="15" stroke-dasharray="' + len.toFixed(2) + ' ' + (c-len).toFixed(2) + '" stroke-dashoffset="' + (-offset).toFixed(2) + '" transform="rotate(-90 72 78)"/>';
+    offset += len;
+  }
+  return out;
+}
+function buildNasSvg(n) {
+  if (!n || !n.ok) return buildWaitingSvg("NAS");
+  const total = Number(n.total_tb) || 0;
+  const parts = [
+    {value:n.movies_tb,color:"#ff9f43"}, {value:n.shows_tb,color:"#54a0ff"}, {value:n.music_tb,color:"#5f27cd"},
+    {value:n.roms_tb,color:"#00d2d3"}, {value:n.other_tb,color:"#8395a7"}, {value:n.free_tb,color:"#2ed573"}
+  ];
+  const top = Math.round(Number(n.free_pct)||0) + "% " + fmtSpace(n.free_tb);
+  return '<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">' +
+    '<rect width="144" height="144" rx="12" fill="#0d1218"/>' +
+    '<text x="72" y="25" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="#e9f7ef">' + escXml(top) + '</text>' +
+    '<circle cx="72" cy="78" r="38" fill="none" stroke="#26313d" stroke-width="15"/>' +
+    donutSegments(parts,total) +
+    '<text x="72" y="86" text-anchor="middle" font-family="Arial" font-size="28" font-weight="900" fill="#f8fafc">NAS</text>' +
+    '<text x="72" y="132" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="#b8c4d1">' + escXml(fmtSpace(n.used_tb)) + ' USED</text></svg>';
+}
+function healthTone(state) {
+  const s=String(state||"unknown").toLowerCase();
+  if (["online","ok","ready","healthy","on","active","running"].includes(s)) return {bg:"#071d16",fg:"#2ed573"};
+  if (["degraded","warning","stale"].includes(s)) return {bg:"#2e2607",fg:"#f1c40f"};
+  if (["offline","error","failed","unavailable","down"].includes(s)) return {bg:"#351014",fg:"#ff4757"};
+  return {bg:"#10151c",fg:"#9aa4b2"};
+}
+function buildHealthSvg(data, runtime) {
+  const apps = Array.isArray(data && data.apps) ? data.apps : [];
+  if (!apps.length) return buildWaitingSvg("HEALTH");
+  const idx = Math.max(0, (runtime && runtime.healthIndex || 0) % apps.length);
+  const app = apps[idx];
+  const c = healthTone(app.state);
+  const name = shortLabel(app.name, 10);
+  const state = shortLabel(app.state, 9);
+  const attrs = app.attributes || {};
+  let value = "";
+  for (const k of ["active_sessions","queue","count","percent","usage","usage_pct"]) {
+    if (attrs[k] !== undefined && attrs[k] !== null) { value = String(attrs[k]); break; }
+  }
+  const main = value || state;
+  const fontSize = value ? 50 : 38;
+  const foot = value ? state : "STATUS";
+  return '<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">' +
+    '<rect width="144" height="144" rx="12" fill="' + c.bg + '"/>' +
+    '<text x="72" y="29" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="#f8fafc">' + escXml(name) + '</text>' +
+    '<text x="72" y="88" text-anchor="middle" font-family="Arial" font-size="' + fontSize + '" font-weight="900" fill="' + c.fg + '" stroke="#000" stroke-width="2" paint-order="stroke">' + escXml(main) + '</text>' +
+    '<text x="72" y="131" text-anchor="middle" font-family="Arial" font-size="24" font-weight="800" fill="#f8fafc">' + escXml(foot) + '</text></svg>';
+}
+async function pollHomeData(force=false) {
+  if (homePollPromise) return homePollPromise;
+  if (!force && homeSnapshot && Date.now()-homeFetchedAt < 15000) return homeSnapshot;
+  homePollPromise=(async()=>{
+    try {
+      homeSnapshot=await fetchJson(HOME_DATA_BASE+"/overview","",6000);
+      homeFetchedAt=Date.now();
+    } catch(err) {
+      if(!homeSnapshot) homeSnapshot={ok:false,error:err.message,heather:{ok:false},nas:{ok:false},health:{apps:[]}};
+    }
+    for(const r of homeRuntimes.values()) renderHomeRuntime(r);
+    return homeSnapshot;
+  })();
+  try{return await homePollPromise;}finally{homePollPromise=null;}
+}
+function renderHomeRuntime(runtime) {
+  if (!homeSnapshot) { runtime.action.setImage(svgData(buildWaitingSvg(runtime.kind))); return; }
+  if (runtime.kind==="heather") runtime.action.setImage(svgData(buildHeatherSvg(homeSnapshot.heather)));
+  else if (runtime.kind==="nas") runtime.action.setImage(svgData(buildNasSvg(homeSnapshot.nas)));
+  else runtime.action.setImage(svgData(buildHealthSvg(homeSnapshot.health,runtime)));
+}
+function armHomeTimer() {
+  if (homeTimer) clearInterval(homeTimer);
+  if (!homeRuntimes.size) { homeTimer=null; return; }
+  homeTimer=setInterval(()=>{
+    for(const r of homeRuntimes.values()){
+      if(r.kind==="health") r.healthIndex=(r.healthIndex||0)+1;
+      renderHomeRuntime(r);
+    }
+    pollHomeData(false);
+  },5000);
+}
+async function homeAppear(ev,kind) {
+  const r={action:ev.action,kind:kind,healthIndex:0,settings:ev.payload && ev.payload.settings || {}};
+  homeRuntimes.set(ev.action.id,r);
+  renderHomeRuntime(r);
+  armHomeTimer();
+  await pollHomeData(false);
+}
+class HeatherEtaAction extends SingletonAction {
+  constructor(){super();this.manifestId="com.jkkec.claude-usage.heather";}
+  async onWillAppear(ev){await homeAppear(ev,"heather");}
+  onWillDisappear(ev){homeRuntimes.delete(ev.action.id);armHomeTimer();}
+  async onKeyDown(){await pollHomeData(true);}
+}
+class NasStorageAction extends SingletonAction {
+  constructor(){super();this.manifestId="com.jkkec.claude-usage.nas";}
+  async onWillAppear(ev){await homeAppear(ev,"nas");}
+  onWillDisappear(ev){homeRuntimes.delete(ev.action.id);armHomeTimer();}
+  async onKeyDown(){await pollHomeData(true);}
+}
+class HealthAwareAppAction extends SingletonAction {
+  constructor(){super();this.manifestId="com.jkkec.claude-usage.healthapp";}
+  async onWillAppear(ev){await homeAppear(ev,"health");}
+  onWillDisappear(ev){homeRuntimes.delete(ev.action.id);armHomeTimer();}
+  async onKeyDown(ev){
+    const r=homeRuntimes.get(ev.action.id);
+    if(r){r.healthIndex=(r.healthIndex||0)+1;renderHomeRuntime(r);}
+    await pollHomeData(true);
+  }
+}
+
 streamDeck.actions.registerAction(new JarvisAiUsageAction());
 streamDeck.actions.registerAction(new CalendarAgendaAction());
+streamDeck.actions.registerAction(new HeatherEtaAction());
+streamDeck.actions.registerAction(new NasStorageAction());
+streamDeck.actions.registerAction(new HealthAwareAppAction());
 streamDeck.connect();
