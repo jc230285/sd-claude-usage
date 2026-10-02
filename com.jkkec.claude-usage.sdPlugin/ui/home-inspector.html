@@ -7,9 +7,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgrou
   <div class="item"><div class="label">Display</div><select id="healthSelection">
     <option value="problems">Problems only — auto scroll</option>
     <option value="all">All apps — auto scroll</option>
-    <option value="Plex">Plex</option>
-    <option value="NAS">NAS</option>
-    <option value="Desktop">Desktop</option>
   </select></div>
   <div class="hint">Problems-only skips healthy apps and rotates through anything that needs attention. Selecting a named app pins the key to that app.</div>
 </div>
@@ -24,7 +21,7 @@ function connectElgatoStreamDeckSocket(port,piUuid,registerEvent,info,actionInfo
   uuid=piUuid;const ai=JSON.parse(actionInfo);settings=ai.payload.settings||{};actionId=ai.action||"";
   if(actionId.endsWith(".healthapp")){
     document.getElementById("healthOptions").style.display="block";
-    const s=document.getElementById("healthSelection");s.value=settings.healthSelection||"problems";s.addEventListener("change",save);
+    const s=document.getElementById("healthSelection");s.addEventListener("change",save);loadApps();
   }
   if(actionId.endsWith(".nas")){
     document.getElementById("nasOptions").style.display="block";loadNas();
@@ -32,6 +29,14 @@ function connectElgatoStreamDeckSocket(port,piUuid,registerEvent,info,actionInfo
   ws=new WebSocket("ws://127.0.0.1:"+port);ws.onopen=()=>ws.send(JSON.stringify({event:registerEvent,uuid:piUuid}));
 }
 function save(){settings.healthSelection=document.getElementById("healthSelection").value;if(ws&&ws.readyState===1)ws.send(JSON.stringify({event:"setSettings",context:uuid,payload:settings}));}
+async function loadApps(){
+  const sel=document.getElementById("healthSelection");
+  try{
+    const r=await fetch("http://100.96.106.91:8793/apps",{cache:"no-store"});const d=await r.json();
+    for(const app of (d.apps||[])){const o=document.createElement("option");o.value=app.name;o.textContent=app.name+" — "+app.state;sel.appendChild(o);}
+  }catch(e){}
+  sel.value=settings.healthSelection||"problems";
+}
 function fmt(n){if(n===null||n===undefined||!isFinite(Number(n)))return "n/a";const x=Number(n);return (x>=1?(Math.round(x*100)/100)+" TB":Math.round(x*1024)+" GB");}
 async function loadNas(){
   const el=document.getElementById("nasBreakdown");
