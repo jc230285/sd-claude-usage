@@ -48,6 +48,42 @@
           "TitleAlignment": "middle"
         }
       ]
+    },
+    {
+      "Name": "Heather ETA",
+      "UUID": "com.jkkec.claude-usage.heather",
+      "Icon": "imgs/actions/usage/icon",
+      "Tooltip": "Heather location and minutes to home",
+      "States": [
+        {
+          "Image": "imgs/actions/usage/icon",
+          "TitleAlignment": "middle"
+        }
+      ]
+    },
+    {
+      "Name": "NAS Storage",
+      "UUID": "com.jkkec.claude-usage.nas",
+      "Icon": "imgs/actions/usage/icon",
+      "Tooltip": "NAS capacity and storage mix",
+      "States": [
+        {
+          "Image": "imgs/actions/usage/icon",
+          "TitleAlignment": "middle"
+        }
+      ]
+    },
+    {
+      "Name": "Health-Aware App",
+      "UUID": "com.jkkec.claude-usage.healthapp",
+      "Icon": "imgs/actions/usage/icon",
+      "Tooltip": "Recent app and service health",
+      "States": [
+        {
+          "Image": "imgs/actions/usage/icon",
+          "TitleAlignment": "middle"
+        }
+      ]
     }
   ]
 }
